@@ -20,7 +20,7 @@ if str(ROOT) not in sys.path:
 # 프로젝트 모듈
 from shopee_creator.controller import ShopeeCreator
 from shopee_creator.utils_creator import extract_sheet_id, get_env
-from shopee_creator.creation_steps import export_tem_xlsx, export_tem_csv
+from shopee_creator.creation_steps import export_tem_xlsx
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Helper: StepReporter (단계별 상태/로그/배너)
@@ -97,9 +97,8 @@ with st.sidebar:
                 st.success("설정이 저장되었습니다!")
                 st.rerun()
 
-for _k in ("DL_XLSX", "DL_CSV"):
-    if _k not in st.session_state:
-        st.session_state[_k] = None
+if "DL_XLSX" not in st.session_state:
+    st.session_state["DL_XLSX"] = None
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Main: 실행/초기화 & 단계 실행
@@ -197,16 +196,13 @@ if run_clicked:
             # sid는 위에서 세션에서 읽은 SOURCE_SPREADSHEET_ID (key)
             sh = ctrl.gs.open_by_key(sid)
 
-            xio = export_tem_xlsx(sh)  # BytesIO or None
+
+            xio = export_tem_xlsx(sh)
             if xio:
                 st.session_state["DL_XLSX"] = xio.getvalue()
-                st.session_state["DL_CSV"] = None
             else:
-                csv_bytes = export_tem_csv(sh)  # bytes or None
                 st.session_state["DL_XLSX"] = None
-                st.session_state["DL_CSV"] = csv_bytes
-        except Exception as ex:
-            st.warning(f"다운로드 생성 중 오류: {ex}")
+                st.warning("엑셀 내보내기 생성에 실패했습니다. TEM_OUTPUT 시트를 확인해 주세요.")            
 
 
 # --------------------------------------------------------------------
@@ -217,22 +213,12 @@ st.subheader("2. 최종 파일 다운로드")
 
 file_base = (st.session_state.get("SHOP_CODE") or "TEM") + "_TEM_OUTPUT"
 xlsx_bytes = st.session_state.get("DL_XLSX")
-csv_bytes  = st.session_state.get("DL_CSV")
 
 st.download_button(
     "📥 템플릿 파일 다운로드 (.xlsx)",
     data=(xlsx_bytes or b""),
-    file_name=f"{file_base}.xlsx",
+    file_name=f"{(st.session_state.get('SHOP_CODE') or 'TEM')}_TEM_OUTPUT.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     use_container_width=True,
     disabled=not bool(xlsx_bytes),
-)
-
-st.download_button(
-    "📥 템플릿 파일 다운로드 (.CSV)",
-    data=(csv_bytes or b""),
-    file_name=f"{file_base}.csv",
-    mime="text/csv",
-    use_container_width=True,
-    disabled=not bool(csv_bytes),
 )
