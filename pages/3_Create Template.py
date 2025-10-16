@@ -2,14 +2,15 @@
 # -*- coding: utf-8 -*-
 
 import streamlit as st
-import io
-import traceback
-from contextlib import redirect_stdout
 from pathlib import Path
 import sys
+import io
+import time
+from contextlib import redirect_stdout
+import traceback
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Page config & import path (Copy Template 스타일)
+# Page config & import path
 # ──────────────────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Create Template", layout="wide")
 
@@ -20,51 +21,17 @@ if str(ROOT) not in sys.path:
 # 프로젝트 모듈
 from shopee_creator.controller import ShopeeCreator
 from shopee_creator.utils_creator import extract_sheet_id, get_env
+import shopee_creator.creation_steps as steps
 from shopee_creator.creation_steps import export_tem_xlsx  # XLSX만 사용
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Helper: StepReporter (단계별 상태/로그/배너)
-# ──────────────────────────────────────────────────────────────────────────────
-class StepReporter:
-    """단계별 진행 상황/로그를 실시간으로 렌더링"""
-    def __init__(self):
-        self.status_area = st.empty()
-        self.log_area = st.empty()
-        self.rows = []  # [(step, status)]
-
-    def set(self, step: str, status: str):
-        # 상태 테이블 갱신
-        for i, (s, _) in enumerate(self.rows):
-            if s == step:
-                self.rows[i] = (step, status)
-                break
-        else:
-            self.rows.append((step, status))
-        md = "| 단계 | 상태 |\n|---|---|\n" + "\n".join(f"| {s} | {t} |" for s, t in self.rows)
-        self.status_area.markdown(md)
-
-    def log(self, text: str):
-        if text:
-            self.log_area.code(text, language="text")
-
-    def banner(self, ok: bool, text: str):
-        (st.success if ok else st.error)(text)
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Sidebar: 설정 폼 (Copy Template 톤&매너)
+# Sidebar: 설정 폼 (URL/이미지 호스팅만)
 # ──────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.subheader("⚙️ 초기 설정")
 
-    cur_source_sid = st.session_state.get(
-        "SOURCE_SPREADSHEET_ID",
-        get_env("SOURCE_SPREADSHEET_ID", "")
-    )
-    cur_img_host = st.session_state.get(
-        "IMAGE_BASE_URL",
-        get_env("IMAGE_BASE_URL", "")
-    )
+    cur_source_sid = st.session_state.get("SOURCE_SPREADSHEET_ID", get_env("SOURCE_SPREADSHEET_ID", ""))
+    cur_img_host  = st.session_state.get("IMAGE_BASE_URL",      get_env("IMAGE_BASE_URL", ""))
 
     with st.form("settings_form_create_template"):
         source_url = st.text_input(
@@ -86,109 +53,110 @@ with st.sidebar:
                 st.error("이미지 호스팅 주소를 확인해주세요. (http/https)")
             else:
                 st.session_state["SOURCE_SPREADSHEET_ID"] = sid
-                st.session_state["IMAGE_BASE_URL"] = image_host
+                st.session_state["IMAGE_BASE_URL"]       = image_host
                 # Shop Code는 본문에서 입력하므로 초기화
-                if "SHOP_CODE" in st.session_state:
-                    del st.session_state["SHOP_CODE"]
+                st.session_state.pop("SHOP_CODE", None)
                 st.success("설정이 저장되었습니다!")
                 st.rerun()
 
 # 다운로드 바이트 세션 기본값 (XLSX만)
-if "DL_XLSX" not in st.session_state:
-    st.session_state["DL_XLSX"] = None
+st.session_state.setdefault("DL_XLSX", None)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Main: 단계 실행
+# Main
 # ──────────────────────────────────────────────────────────────────────────────
 st.title("Create Template")
 st.markdown("---")
 st.subheader("1. 파일 및 샵 코드 입력")
 
-# 본문에 샵 코드 입력
 sid = st.session_state.get("SOURCE_SPREADSHEET_ID", "")
 base_url = st.session_state.get("IMAGE_BASE_URL", "")
+
 shop_code_input = st.text_input(
     "샵 코드 입력",
     value=st.session_state.get("SHOP_CODE", ""),
     placeholder="예: RO, 01 등 커버 이미지 코드와 동일하게 입력하세요.",
 )
 
-# 실행 버튼 (아래, 세로 배치)
 run_enabled = bool(sid and shop_code_input.strip())
 run_clicked = st.button("🚀 파일 업로드 및 실행", type="primary", use_container_width=True, disabled=not run_enabled)
 
+# ──────────────────────────────────────────────────────────────────────────────
+# 실행: 프로그레스바 방식(표/로그 X), 단계별 직접 호출(C1→C2→C7→C3→C4→C5→C6)
+# ──────────────────────────────────────────────────────────────────────────────
 if run_clicked:
     shop_code = shop_code_input.strip()
-    st.session_state["SHOP_CODE"] = shop_code  # 최신값 반영
+    st.session_state["SHOP_CODE"] = shop_code  # 최신 반영
 
-    # Controller 준비
+    # 컨트롤러 / gspread 클라이언트 준비 (한 번만)
     ctrl = ShopeeCreator(st.secrets)
     if base_url or shop_code:
         try:
             ctrl.set_image_base(base_url=base_url, shop_code=shop_code)
         except Exception:
-            # set_image_base 없거나 실패해도 치명적이지 않음
             pass
 
-    reporter = StepReporter()
-    st.subheader("실행 로그")
+    # 입력 시트/레퍼런스 시트 Open (open_by_key로 1회씩만)
+    try:
+        gs = ctrl.gs
+        sh  = gs.open_by_key(sid)
+    except Exception as e:
+        st.error(f"입력 시트 열기 실패: {e}")
+        st.stop()
 
-    steps = [
-        ("C1 Initialize",           lambda: ctrl.run_step("C1", source_url=f"https://docs.google.com/spreadsheets/d/{sid}")),
-        ("C2 Collection → TEM",     lambda: ctrl.run_step("C2")),
-        ("C7 Mandatory Defaults",   lambda: ctrl.run_step("C7")),
-        ("C3 FDA",                  lambda: ctrl.run_step("C3")),
-        ("C4 Prices",               lambda: ctrl.run_step("C4")),
-        ("C5 Images",               lambda: ctrl.run_step("C5")),
-        ("C6 Stock/Weight/Brand",   lambda: ctrl.run_step("C6")),
+    # Ref URL/ID 읽기 (secrets: REFERENCE_SPREADSHEET_ID or URL)
+    ref_id_or_url = st.secrets.get("REFERENCE_SPREADSHEET_ID") or st.secrets.get("REFERENCE_SPREADSHEET_URL") or ""
+    try:
+        rid = extract_sheet_id(str(ref_id_or_url))
+        ref = gs.open_by_key(rid)
+    except Exception as e:
+        st.error(f"레퍼런스 시트 열기 실패: secrets에 REFERENCE_SPREADSHEET_ID/URL을 확인하세요.\n\nError: {e}")
+        st.stop()
+
+    # 프로그레스바
+    progress = st.progress(0.0, text="시작합니다…")
+
+    # 단계 정의
+    run_list = [
+        ("C1 Initialize",             lambda: steps.run_step_C1(sh, ref)),
+        ("C2 Collection → TEM",       lambda: steps.run_step_C2(sh, ref)),
+        ("C7 Mandatory Defaults",     lambda: steps.run_step_C7_mandatory_defaults(sh, ref)),
+        ("C3 FDA",                    lambda: steps.run_step_C3_fda(sh, ref)),
+        ("C4 Prices",                 lambda: steps.run_step_C4_prices(sh)),
+        ("C5 Images",                 lambda: steps.run_step_C5_images(sh=sh, base_url=base_url, shop_code=shop_code)),
+        ("C6 Stock/Weight/Brand",     lambda: steps.run_step_C6_stock_weight_brand(sh)),
     ]
 
+    total = len(run_list)
     ok = True
-    for name, fn in steps:
-        reporter.set(name, "⏳ 진행 중")
-        buf = io.StringIO()
+
+    for i, (name, fn) in enumerate(run_list, start=1):
         try:
+            progress.progress((i-1)/total, text=f"{name} 실행 중…")
+            # 내부 print 로그는 캡처만 하고 화면엔 출력하지 않음
+            buf = io.StringIO()
             with redirect_stdout(buf):
                 fn()
-            out = buf.getvalue().strip()
-            if out:
-                reporter.log(out)
-            reporter.set(name, "✅ 완료")
-        except AttributeError:
-            # run_step이 없으면 구(舊) run() 폴백
-            reporter.set(name, "⏳ 진행 중 (호환 모드)")
-            buf = io.StringIO()
-            try:
-                with redirect_stdout(buf):
-                    ctrl.run(input_sheet_url=f"https://docs.google.com/spreadsheets/d/{sid}")
-                out = buf.getvalue().strip()
-                if out:
-                    reporter.log(out)
-                reporter.set(name, "✅ 완료")
-            except Exception:
-                out = buf.getvalue().strip()
-                if out:
-                    reporter.log(out)
-                reporter.log(traceback.format_exc())
-                reporter.set(name, "❌ 실패")
-                reporter.banner(False, f"실행 실패: {name} 단계에서 오류가 발생했습니다.")
-                ok = False
-                break
+            # 약간의 슬립으로 API 피크 완화(429 방지 도움)
+            time.sleep(0.2)
+            progress.progress(i/total, text=f"{name} 완료")
         except Exception:
-            out = buf.getvalue().strip()
-            if out:
-                reporter.log(out)
-            reporter.log(traceback.format_exc())
-            reporter.set(name, "❌ 실패")
-            reporter.banner(False, f"실행 실패: {name} 단계에서 오류가 발생했습니다.")
+            progress.progress((i-1)/total, text=f"{name} 실패")
+            # 개발용 디버깅을 위해서는 아래 주석 해제 가능
+            # st.code(buf.getvalue())
+            st.error(f"실행 실패: {name} 단계에서 오류가 발생했습니다.")
+            # 상세 오류는 Expander로만 노출(원하면 제거 가능)
+            with st.expander("자세한 오류", expanded=False):
+                st.code(traceback.format_exc())
             ok = False
             break
 
     if ok:
-        reporter.banner(True, "모든 단계가 정상 완료되었습니다! 🎉")
+        progress.progress(1.0, text="모든 단계 완료")
+        st.success("모든 단계가 정상 완료되었습니다! 🎉")
+
         # 실행 직후 바로 내보내기 파일 생성 → 세션 저장 (버튼 즉시 활성화)
         try:
-            sh = ctrl.gs.open_by_key(sid)
             xio = export_tem_xlsx(sh)  # BytesIO or None
             if xio:
                 st.session_state["DL_XLSX"] = xio.getvalue()
