@@ -20,7 +20,7 @@ if str(ROOT) not in sys.path:
 # 프로젝트 모듈
 from shopee_creator.controller import ShopeeCreator
 from shopee_creator.utils_creator import extract_sheet_id, get_env
-from shopee_creator.creation_steps import export_tem_xlsx
+from shopee_creator.creation_steps import export_tem_xlsx  # XLSX만 사용
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Helper: StepReporter (단계별 상태/로그/배너)
@@ -65,10 +65,6 @@ with st.sidebar:
         "IMAGE_BASE_URL",
         get_env("IMAGE_BASE_URL", "")
     )
-    cur_shop_code = st.session_state.get(
-        "SHOP_CODE",
-        get_env("SHOP_CODE", "")
-    )
 
     with st.form("settings_form_create_template"):
         source_url = st.text_input(
@@ -91,20 +87,20 @@ with st.sidebar:
             else:
                 st.session_state["SOURCE_SPREADSHEET_ID"] = sid
                 st.session_state["IMAGE_BASE_URL"] = image_host
-                # Shop Code는 본문에서 입력
+                # Shop Code는 본문에서 입력하므로 초기화
                 if "SHOP_CODE" in st.session_state:
                     del st.session_state["SHOP_CODE"]
                 st.success("설정이 저장되었습니다!")
                 st.rerun()
 
+# 다운로드 바이트 세션 기본값 (XLSX만)
 if "DL_XLSX" not in st.session_state:
     st.session_state["DL_XLSX"] = None
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Main: 실행/초기화 & 단계 실행
+# Main: 단계 실행
 # ──────────────────────────────────────────────────────────────────────────────
 st.title("Create Template")
-
 st.markdown("---")
 st.subheader("1. 파일 및 샵 코드 입력")
 
@@ -118,8 +114,8 @@ shop_code_input = st.text_input(
 )
 
 # 실행 버튼 (아래, 세로 배치)
-run_disabled = not (sid and shop_code_input.strip())
-run_clicked = st.button("🚀 파일 업로드 및 실행", type="primary", use_container_width=True, disabled=not sid or run_disabled)
+run_enabled = bool(sid and shop_code_input.strip())
+run_clicked = st.button("🚀 파일 업로드 및 실행", type="primary", use_container_width=True, disabled=not run_enabled)
 
 if run_clicked:
     shop_code = shop_code_input.strip()
@@ -131,6 +127,7 @@ if run_clicked:
         try:
             ctrl.set_image_base(base_url=base_url, shop_code=shop_code)
         except Exception:
+            # set_image_base 없거나 실패해도 치명적이지 않음
             pass
 
     reporter = StepReporter()
@@ -187,27 +184,24 @@ if run_clicked:
             ok = False
             break
 
-
     if ok:
         reporter.banner(True, "모든 단계가 정상 완료되었습니다! 🎉")
-
-        # [ADD] 실행 직후 바로 내보내기 파일 생성 → 세션 저장 (버튼 즉시 활성화)
+        # 실행 직후 바로 내보내기 파일 생성 → 세션 저장 (버튼 즉시 활성화)
         try:
-            # sid는 위에서 세션에서 읽은 SOURCE_SPREADSHEET_ID (key)
             sh = ctrl.gs.open_by_key(sid)
-
-
-            xio = export_tem_xlsx(sh)
+            xio = export_tem_xlsx(sh)  # BytesIO or None
             if xio:
                 st.session_state["DL_XLSX"] = xio.getvalue()
             else:
                 st.session_state["DL_XLSX"] = None
-                st.warning("엑셀 내보내기 생성에 실패했습니다. TEM_OUTPUT 시트를 확인해 주세요.")            
+                st.warning("엑셀 내보내기 생성에 실패했습니다. TEM_OUTPUT 시트를 확인해 주세요.")
+        except Exception as ex:
+            st.session_state["DL_XLSX"] = None
+            st.warning(f"다운로드 생성 중 오류: {ex}")
 
-
-# --------------------------------------------------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 # 2. 최종 파일 다운로드 (항상 표시: 준비되면 자동 활성화)
-# --------------------------------------------------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 st.markdown("---")
 st.subheader("2. 최종 파일 다운로드")
 
@@ -217,7 +211,7 @@ xlsx_bytes = st.session_state.get("DL_XLSX")
 st.download_button(
     "📥 템플릿 파일 다운로드 (.xlsx)",
     data=(xlsx_bytes or b""),
-    file_name=f"{(st.session_state.get('SHOP_CODE') or 'TEM')}_TEM_OUTPUT.xlsx",
+    file_name=f"{file_base}.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     use_container_width=True,
     disabled=not bool(xlsx_bytes),
