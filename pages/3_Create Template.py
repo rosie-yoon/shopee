@@ -80,11 +80,6 @@ with st.sidebar:
             value=cur_img_host or "",
             placeholder="예: https://cdn.example.com/SHOPCODE/",
         )
-        shop_code = st.text_input(
-            "Shop Code",
-            value=cur_shop_code or "",
-            placeholder="예: KIKI",
-        )
         submitted = st.form_submit_button("저장")
         if submitted:
             sid = extract_sheet_id(source_url)
@@ -93,10 +88,11 @@ with st.sidebar:
             elif image_host and not image_host.startswith(("http://", "https://")):
                 st.error("이미지 호스팅 주소를 확인해주세요. (http/https)")
             else:
-                # 세션 저장
                 st.session_state["SOURCE_SPREADSHEET_ID"] = sid
                 st.session_state["IMAGE_BASE_URL"] = image_host
-                st.session_state["SHOP_CODE"] = shop_code
+                # Shop Code는 본문에서 입력
+                if "SHOP_CODE" in st.session_state:
+                    del st.session_state["SHOP_CODE"]
                 st.success("설정이 저장되었습니다!")
                 st.rerun()
 
@@ -106,27 +102,25 @@ with st.sidebar:
 st.title("Create Template")
 st.caption("C1 → C2 → C7 → C3 → C4 → C5 → C6 순서로 템플릿 생성/보정")
 
-st.divider()
-col1, col2 = st.columns([1, 1], gap="small")
-with col1:
-    run_clicked = st.button("실행", type="primary", use_container_width=True)
-with col2:
-    reset_clicked = st.button("초기화", use_container_width=True)
+st.markdown("---")
+st.subheader("1. 파일 및 샵 코드 입력")
 
-if reset_clicked:
-    for k in ("SOURCE_SPREADSHEET_ID", "IMAGE_BASE_URL", "SHOP_CODE"):
-        if k in st.session_state:
-            del st.session_state[k]
-    st.rerun()
+# 본문에 샵 코드 입력
+sid = st.session_state.get("SOURCE_SPREADSHEET_ID", "")
+base_url = st.session_state.get("IMAGE_BASE_URL", "")
+shop_code_input = st.text_input(
+    "샵 코드 입력",
+    value=st.session_state.get("SHOP_CODE", ""),
+    placeholder="예: RO, 01 등 커버 이미지 코드와 동일하게 입력하세요.",
+)
+
+# 실행 버튼 (아래, 세로 배치)
+run_disabled = not (sid and shop_code_input.strip())
+run_clicked = st.button("🚀 파일 업로드 및 실행", type="primary", use_container_width=True, disabled=not sid or run_disabled)
 
 if run_clicked:
-    sid = st.session_state.get("SOURCE_SPREADSHEET_ID", "")
-    base_url = st.session_state.get("IMAGE_BASE_URL", "")
-    shop_code = st.session_state.get("SHOP_CODE", "")
-
-    if not sid:
-        st.error("사이드바에서 '상품등록 시트 URL'을 먼저 저장해 주세요.")
-        st.stop()
+    shop_code = shop_code_input.strip()
+    st.session_state["SHOP_CODE"] = shop_code  # 최신값 반영
 
     # Controller 준비
     ctrl = ShopeeCreator(st.secrets)
@@ -134,13 +128,11 @@ if run_clicked:
         try:
             ctrl.set_image_base(base_url=base_url, shop_code=shop_code)
         except Exception:
-            # set_image_base 없거나 실패해도 치명적이지 않음
             pass
 
     reporter = StepReporter()
     st.subheader("실행 로그")
 
-    # 단계 정의 (컨트롤러에 run_step(tag, ...)가 있을 때)
     steps = [
         ("C1 Initialize",           lambda: ctrl.run_step("C1", source_url=f"https://docs.google.com/spreadsheets/d/{sid}")),
         ("C2 Collection → TEM",     lambda: ctrl.run_step("C2")),
@@ -163,18 +155,17 @@ if run_clicked:
                 reporter.log(out)
             reporter.set(name, "✅ 완료")
         except AttributeError:
-            # 컨트롤러에 run_step이 없는 경우: 기존 ctrl.run(...)으로 폴백
+            # run_step이 없으면 구(舊) run() 폴백
             reporter.set(name, "⏳ 진행 중 (호환 모드)")
             buf = io.StringIO()
             try:
                 with redirect_stdout(buf):
-                    # 기존 run(input_sheet_url=...) 시그니처 가정
                     ctrl.run(input_sheet_url=f"https://docs.google.com/spreadsheets/d/{sid}")
                 out = buf.getvalue().strip()
                 if out:
                     reporter.log(out)
                 reporter.set(name, "✅ 완료")
-            except Exception as e:
+            except Exception:
                 out = buf.getvalue().strip()
                 if out:
                     reporter.log(out)
@@ -183,7 +174,7 @@ if run_clicked:
                 reporter.banner(False, f"실행 실패: {name} 단계에서 오류가 발생했습니다.")
                 ok = False
                 break
-        except Exception as e:
+        except Exception:
             out = buf.getvalue().strip()
             if out:
                 reporter.log(out)
@@ -195,3 +186,7 @@ if run_clicked:
 
     if ok:
         reporter.banner(True, "모든 단계가 정상 완료되었습니다! 🎉")
+
+# 다운로드 섹션 타이틀도 Copy Template처럼
+st.markdown("---")
+st.subheader("2. 최종 파일 다운로드")
