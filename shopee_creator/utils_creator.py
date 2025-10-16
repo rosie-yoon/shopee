@@ -79,18 +79,29 @@ def _authorize_gspread_via_secrets():
     """Streamlit secrets를 사용하여 인증"""
     if st is None or not hasattr(st, "secrets"):
         return None
-    
     try:
-        if "gcp_service_account" in st.secrets:
-            scopes = [
-                "https://www.googleapis.com/auth/spreadsheets",
-                "https://www.googleapis.com/auth/drive",
-            ]
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ]
+
+        # 1) dict 형태
+        if "gcp_service_account" in st.secrets and isinstance(st.secrets["gcp_service_account"], dict):
             creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
             return gspread.authorize(creds)
+
+        # 2) 문자열 JSON (GOOGLE_SERVICE_ACCOUNT_JSON / GOOGLE_CREDENTIALS)
+        for k in ("GOOGLE_SERVICE_ACCOUNT_JSON", "GOOGLE_CREDENTIALS"):
+            raw = st.secrets.get(k)
+            if raw:
+                import json
+                info = json.loads(str(raw))
+                creds = Credentials.from_service_account_info(info, scopes=scopes)
+                return gspread.authorize(creds)
     except Exception:
         pass
     return None
+
 
 def authorize_gspread() -> gspread.Client:
     """인증 방식 우선순위에 따라 gspread.Client를 반환"""
@@ -183,6 +194,55 @@ def with_retry[T](func: Callable[[], T], max_tries=5, delay=1.0) -> Optional[T]:
 def safe_worksheet(sh: gspread.Spreadsheet, title: str) -> gspread.Worksheet:
     """시트가 존재하는지 확인하고 반환. 없으면 WorksheetNotFound 발생."""
     return with_retry(lambda: sh.worksheet(title))
+
+
+# ========== Read 캐시 + 429 백오프 래퍼 ==========
+_READ_CACHE: Dict[tuple[str, str], List[List[str]]] = {}
+
+def read_values(ws: gspread.Worksheet, *, range_name: Optional[str] = None, use_cache: bool = True) -> List[List[str]]:
+    """
+    ws.get_all_values()/ws.get(range)를 캐시 + 429 지수 백오프로 감싼 래퍼.
+    - 동일 실행(run) 동안 같은 시트/범위를 재요청하면 캐시로 반환
+    - 429/503 류는 지수 백오프 + 지터로 재시도
+    """
+    import random
+    sid = f"{ws.spreadsheet.id}#{ws.id}"
+    key = (sid, range_name or "__ALL__")
+    if use_cache and key in _READ_CACHE:
+        return _READ_CACHE[key]
+
+    def _do():
+        if range_name:
+            return ws.get(range_name, value_render_option="UNFORMATTED_VALUE") or []
+        return ws.get_all_values() or []
+
+    delay = 1.0
+    for _ in range(6):  # 1,2,4,8,16,32s
+        try:
+            vals = _do()
+            if use_cache:
+                _READ_CACHE[key] = vals
+            return vals
+        except gspread.exceptions.APIError as e:
+            code = getattr(getattr(e, "response", None), "status_code", None)
+            if code in (429, 500, 503):
+                time.sleep(delay + random.uniform(0, 0.3))
+                delay *= 2
+                continue
+            raise
+        except Exception as e:
+            # 기타 네트워크 일시 오류 방어
+            s = str(e).lower()
+            if any(t in s for t in ("rate", "429", "resource_exhausted", "temporarily", "timeout")):
+                time.sleep(delay + random.uniform(0, 0.3))
+                delay *= 2
+                continue
+            raise
+
+    vals = _do()
+    if use_cache:
+        _READ_CACHE[key] = vals
+    return vals
 
 
 # =============================
