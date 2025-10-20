@@ -90,7 +90,7 @@ shop_code_input = st.text_input(
 )
 
 run_enabled = bool(sid and shop_code_input.strip())
-run_clicked = st.button("🚀 파일 업로드 및 실행", type="primary", use_container_width=True, disabled=not run_enabled)
+run_clicked = st.button("🚀 실행", type="primary", use_container_width=True, disabled=not run_enabled)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 실행: 프로그레스바 방식(표/로그 X), 단계별 직접 호출(C1→C2→C7→C3→C4→C5→C6)
