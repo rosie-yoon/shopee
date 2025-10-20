@@ -305,6 +305,11 @@ def run():
 
     with left:
         st.subheader("이미지 업로드")
+        # ⬇️ 일반 사진 허용 토글 위치 이동: 업로드 타이틀 바로 아래
+        st.checkbox(
+            "템플릿을 앞에 배치",
+            key="allow_non_alpha_overlay",
+        )
         item_files = st.file_uploader(
             "1. Item 이미지 업로드 (누끼 딴 이미지, PNG/WEBP)",
             type=["png", "webp"],
@@ -354,13 +359,13 @@ def run():
         else:
             c3.selectbox("그림자 프리셋", list(SHADOW_PRESETS.keys()), key="shadow_preset")
 
-        # 신규 옵션(레이아웃/타이틀 유지, 설명 최소 추가)
-        st.checkbox(
-            "일반 사진 허용(누끼 없을 때 템플릿 덮기)",
-            key="allow_non_alpha_overlay",
-        )
+                # ---- 프리뷰 고정 슬롯(깜빡임 최소화) ----
+        preview_header = st.empty()
+        preview_nav    = st.empty()
+        preview_image  = st.empty()
+        preview_hint   = st.empty()
 
-        # ---- 프리뷰 고정 슬롯(깜빡임 최소화) ----
+        preview_header.subheader("미리보기")(깜빡임 최소화) ----
         preview_header = st.empty()
         preview_nav    = st.empty()
         preview_image  = st.empty()
