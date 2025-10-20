@@ -308,7 +308,7 @@ def run():
             "1. Item 이미지 업로드 (누끼 딴 이미지, PNG/WEBP)",
             type=_item_types,
             accept_multiple_files=True,
-            key=f"item_{ss.item_uploader_key}",
+            key=f"item_{ss.item_uploader_key}_{1 if ss.allow_non_alpha_overlay else 0}",
         )
         if st.button("아이템 리스트 삭제", key="btn_clear_items"):
             ss.item_uploader_key += 1
@@ -316,7 +316,7 @@ def run():
             "2. Template 이미지 업로드",
             type=["png", "jpg", "jpeg", "webp"],
             accept_multiple_files=True,
-            key=f"tpl_{ss.template_uploader_key}",
+            key=f"tpl_{ss.template_uploader_key}_{1 if ss.allow_non_alpha_overlay else 0}",
         )
         if st.button("템플릿 삭제", key="btn_clear_tpls"):
             ss.template_uploader_key += 1
