@@ -404,11 +404,12 @@ def run():
             img_in = _to_streamlit_image_input(ss.preview_img)
             if img_in is not None:
                 try:
-                _im = PILImage.open(io.BytesIO(img_in if isinstance(img_in, (bytes, bytearray)) else img_in.getvalue()))
-                _w = int(max(1, _im.width * PREVIEW_SCALE))
-            except Exception:
-                _w = None
-            _st_image(img_in, caption="미리보기 (단일)", width=_w)
+                    _src = img_in if isinstance(img_in, (bytes, bytearray)) else (img_in.getvalue() if hasattr(img_in, "getvalue") else None)
+                    _im = PILImage.open(io.BytesIO(_src)) if _src is not None else None
+                    _w = int(max(1, _im.width * PREVIEW_SCALE)) if _im else None
+                except Exception:
+                    _w = None
+                _st_image(img_in, caption="미리보기 (단일)", width=_w)
                 preview_hint.caption("업로드/설정 변경 시 자동으로 여러 장 미리보기를 생성합니다.")
             else:
                 preview_image.empty()
