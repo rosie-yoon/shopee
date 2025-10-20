@@ -18,22 +18,27 @@ from image_compose.composer_utils import (
 BASE_DIR = Path(__file__).resolve().parent
 
 
-# ---------- Streamlit 호환 이미지 렌더 ----------
+# ---------- Streamlit 호환 이미지 렌더 (가운데 정렬) ----------
 def _st_image(img, width: int | None = None, **kwargs):
-    """Streamlit 버전별 image 인자 호환.
-    width가 주어지면 컨테이너 폭을 쓰지 않고 해당 픽셀 폭으로 렌더.
+    """Streamlit 버전별 image 인자 호환 + 중앙정렬.
+    width가 주어지면 해당 픽셀 폭으로 렌더.
     """
-    if width is not None:
-        return st.image(img, width=width, **kwargs)
-    try:
-        return st.image(img, use_container_width=True, **kwargs)
-    except TypeError:
-        kwargs.pop("use_container_width", None)
+    container = st.container()
+    _, center_col, _ = container.columns([1, 4, 1])
+
+    with center_col:
+        if width is not None:
+            return st.image(img, width=width, **kwargs)
         try:
-            return st.image(img, use_column_width=True, **kwargs)
+            return st.image(img, use_container_width=True, **kwargs)
         except TypeError:
-            kwargs.pop("use_column_width", None)
-            return st.image(img, **kwargs)
+            kwargs.pop("use_container_width", None)
+            try:
+                return st.image(img, use_column_width=True, **kwargs)
+            except TypeError:
+                kwargs.pop("use_column_width", None)
+                return st.image(img, **kwargs)
+
 
 
 # ---------- Streamlit이 받을 수 있는 이미지 타입으로 정규화 ----------
@@ -299,7 +304,7 @@ def run():
         st.subheader("이미지 업로드")
         # 일반 사진 허용 토글: 업로드 타이틀 바로 아래
         st.checkbox(
-            "일반 사진 허용(누끼 없을 때 템플릿 덮기)",
+            "템플릿 앞에 배치",
             key="allow_non_alpha_overlay",
         )
         # 업로드 허용 확장자: 토글 ON이면 JPG/JPEG도 허용
