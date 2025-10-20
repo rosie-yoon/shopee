@@ -8,7 +8,7 @@ import streamlit as st
 from PIL import Image as PILImage  # 별칭 통일
 
 # 내부 유틸
-from .composer_utils import compose_one_bytes, SHADOW_PRESETS, has_useful_alpha, ensure_rgba
+from image_compose.composer_utils import compose_one_bytes, SHADOW_PRESETS, has_useful_alpha, ensure_rgba
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -307,7 +307,7 @@ def run():
         st.subheader("이미지 업로드")
         # ⬇️ 일반 사진 허용 토글 위치 이동: 업로드 타이틀 바로 아래
         st.checkbox(
-            "템플릿을 앞에 배치",
+            "일반 사진 허용(누끼 없을 때 템플릿 덮기)",
             key="allow_non_alpha_overlay",
         )
         item_files = st.file_uploader(
