@@ -108,7 +108,7 @@ def run():
         # 신규 옵션 포함(체크박스 토글 시 미리보기 즉시 갱신)
         return (ss.anchor, float(ss.resize_ratio), ss.shadow_preset, bool(ss.allow_non_alpha_overlay))
 
-    # ---- 합성 미리보기 (첫 1장) ----
+    # ---- 합성 미리보기 (첫 1장)
     def update_preview(item_files, template_files):
         """업로드된 첫 번째 아이템/템플릿으로 미리보기 1장을 만들어 ss.preview_img(bytes)에 저장."""
         ss.preview_img = None
@@ -163,7 +163,7 @@ def run():
             data = bytes(result)
         ss.preview_img = data
 
-    # ---- 다중 미리보기 생성 (자동/실시간) ----
+    # ---- 다중 미리보기 생성 (자동/실시간)
     def generate_preview_list(item_files, template_files, max_count: int = 12):
         """업로드된 아이템 × 템플릿 조합으로 최대 max_count장의 미리보기(bytes) 생성."""
         ss.preview_list = []
@@ -247,7 +247,7 @@ def run():
         zip_buf.seek(0)
         return zip_buf, count
 
-    # ---- 다운로드 다이얼로그 (샵코드 → 즉시 다운로드, 클릭 후 자동 닫기) ----
+    # ---- 다운로드 다이얼로그 (샵코드 → 즉시 다운로드, 클릭 후 자동 닫기)
     @st.dialog("출력 설정")
     def show_save_dialog(item_files, template_files):
         st.caption("샵코드를 입력하고 ‘다운로드’를 누르면 Zip 파일이 저장됩니다.")
@@ -359,13 +359,13 @@ def run():
         else:
             c3.selectbox("그림자 프리셋", list(SHADOW_PRESETS.keys()), key="shadow_preset")
 
-                # ---- 프리뷰 고정 슬롯(깜빡임 최소화) ----
+                # ---- 프리뷰 고정 슬롯(깜빡임 최소화)
         preview_header = st.empty()
         preview_nav    = st.empty()
         preview_image  = st.empty()
         preview_hint   = st.empty()
 
-        preview_header.subheader("미리보기") ----
+        preview_header.subheader("미리보기")
         preview_header = st.empty()
         preview_nav    = st.empty()
         preview_image  = st.empty()
@@ -409,7 +409,7 @@ def run():
                 preview_image.empty()
                 preview_hint.caption("파일을 업로드하면 미리보기가 표시됩니다.")
 
-        # ---- 이미지 생성(= 다운로드 대화상자 열기) ----
+        # ---- 이미지 생성(= 다운로드 대화상자 열기)
         st.button(
             "이미지 생성",
             type="primary",
