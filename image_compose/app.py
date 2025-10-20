@@ -365,7 +365,7 @@ def run():
         preview_image  = st.empty()
         preview_hint   = st.empty()
 
-        preview_header.subheader("미리보기")(깜빡임 최소화) ----
+        preview_header.subheader("미리보기") ----
         preview_header = st.empty()
         preview_nav    = st.empty()
         preview_image  = st.empty()
