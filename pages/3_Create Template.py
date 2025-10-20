@@ -59,6 +59,17 @@ with st.sidebar:
                 st.success("설정이 저장되었습니다!")
                 st.rerun()
 
+        st.write("")  
+
+        st.markdown(
+            """
+        * [상품등록 시트 템플릿](https://docs.google.com/spreadsheets/d/1MP4kpazAQkvGI7Ew31jthKnwjs8WZP0kWhyLPUpTgJA/edit?gid=0#gid=0)의 사본을 생성하여 위 구글 시트 URL 란에 입력해주세요.  
+        * 사본 생성 시, 시트의 안내사항을 꼭 확인해주세요.
+        """
+        )
+
+
+
 # 다운로드 바이트 세션 기본값 (XLSX만)
 st.session_state.setdefault("DL_XLSX", None)
 

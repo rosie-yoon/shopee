@@ -561,6 +561,18 @@ def run_step_4(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
     
     if cells_to_update:
         with_retry(lambda: tem_ws.update_cells(cells_to_update, value_input_option="USER_ENTERED"))
+
+    # EXCLUDE_BRAND_FAILURES=true 이면 BRAND_CODE_NOT_FOUND는 Failures 탭에서 제외
+    # EXCLUDE_FAILURE_CODES="CODE1,CODE2" 형식으로 추가 예외코드를 콤마로 지정 가능
+    if get_bool_env("EXCLUDE_BRAND_FAILURES", True) or get_env("EXCLUDE_FAILURE_CODES", ""):
+        exclude_codes = [c.strip() for c in get_env("EXCLUDE_FAILURE_CODES", "").split(",") if c.strip()]
+        if get_bool_env("EXCLUDE_BRAND_FAILURES", True):
+            exclude_codes.append("BRAND_CODE_NOT_FOUND")
+        if exclude_codes:
+            failures = [
+                r for r in failures
+                if not (len(r) >= 4 and str(r[3]).strip() in set(exclude_codes))
+            ]
     
     if failures:
         _append_failures(sh, failures)
@@ -722,6 +734,61 @@ def run_step_7(sh: gspread.Spreadsheet):
         engine = "openpyxl"
 
     with pd.ExcelWriter(output, engine=engine) as writer:
+
+        # === [추가] Failures 시트 첫 탭으로 내보내기 정책 ===
+        # EXPORT_FAILURES_MODE: "auto"(기본, 값 있으면 포함) | "always"(무조건 포함) | "never"(항상 제외)
+        mode = (get_env("EXPORT_FAILURES_MODE", "auto") or "auto").strip().lower()
+        try:
+            fvals = []
+            if mode != "never":
+                try:
+                    fws = safe_worksheet(sh, "Failures")
+                    fvals = with_retry(lambda: fws.get_all_values()) or []
+                except WorksheetNotFound:
+                    fvals = []
+
+            # 값 유무 판단: 한 셀이라도 비어있지 않으면 "데이터 있음"
+            has_values = any(any((c or "").strip() for c in row) for row in fvals)
+
+            include_failures = (mode == "always") or (mode == "auto" and has_values)
+            if include_failures:
+                df_fail = pd.DataFrame(fvals)
+                # 원본 그리드 보존을 위해 header=False
+                df_fail.to_excel(writer, sheet_name="Failures", index=False, header=False)
+        except Exception as e:
+            print(f"[WARN] Failures 시트 첨부 중 오류: {e}")
+
+        for i, header_index in enumerate(header_indices):
+            # [헤더행+1, 다음 헤더행) 구간이 데이터
+            start_row = header_index + 1
+            end_row = header_indices[i + 1] if i + 1 < len(header_indices) else len(df)
+            if start_row >= end_row:
+                continue  # 빈 구간
+    
+            # ---- 헤더/데이터 구성 ----
+            # 기존 로직과 동일하게 "첫 번째 컬럼은 제외"하고 저장
+            header_row = df.iloc[header_index, 1:]               # 헤더(2열부터)
+            chunk_df = df.iloc[start_row:end_row, 1:].copy()     # 데이터(2열부터)
+
+            # 첫 번째 데이터 컬럼의 하이픈 공백 정규화 (기존 로직 유지)
+            if not chunk_df.empty:
+                first_col = chunk_df.columns[0]
+                chunk_df[first_col] = (
+                    chunk_df[first_col]
+                    .astype(str)
+                    .str.replace(r"\s*-\s*", "-", regex=True)
+                )
+
+            # 컬럼명 = 헤더 행 값
+            columns = header_row.astype(str).tolist()
+            # 길이 보정(이상치 방어)
+            if len(columns) != chunk_df.shape[1]:
+                if len(columns) < chunk_df.shape[1]:
+                    columns += [f"col_{k}" for k in range(len(columns), chunk_df.shape[1])]
+                else:
+                    columns = columns[: chunk_df.shape[1]]
+            chunk_df.columns = columns
+
         for i, header_index in enumerate(header_indices):
             # [헤더행+1, 다음 헤더행) 구간이 데이터
             start_row = header_index + 1
