@@ -1,4 +1,3 @@
-
 import io
 from pathlib import Path
 from PIL import Image, ImageFilter
@@ -68,6 +67,9 @@ def compose_one_bytes(item_img: Image.Image, template_img: Image.Image, **opts) 
       - shadow_preset: str in SHADOW_PRESETS (default "off")
       - out_format: "JPEG" | "PNG" (default "JPEG")
       - quality: int (default 92) for JPEG
+      - overlay_template_if_no_alpha: bool (default False)
+          → 아이템에 유효한 알파가 없으면 템플릿을 최상단에 '덮어쓰기'
+          → 이 분기에서는 그림자 프리셋을 무시(강제 off)
     """
     # 0) 입력 이미지 보정
     item_rgba = ensure_rgba(item_img)
@@ -85,46 +87,65 @@ def compose_one_bytes(item_img: Image.Image, template_img: Image.Image, **opts) 
     anchor = opts.get("anchor", "center")
     x, y = compute_anchor_position(template_rgba.size, item_rgba.size, anchor)
 
-    # 3) 최종 캔버스 준비 (템플릿 복사본)
-    final_img = template_rgba.copy()
+    # --- 신규 분기 조건 계산 ---
+    overlay_non_alpha = bool(opts.get("overlay_template_if_no_alpha", False))
+    is_cutout = has_useful_alpha(item_rgba)
 
-    # 4) 그림자 프리셋 적용 (항상 아이템 뒤에 먼저 합성)
-    preset_name = str(opts.get("shadow_preset", "off"))
-    preset = SHADOW_PRESETS.get(preset_name, SHADOW_PRESETS["off"])
+    # -------- (B) 일반사진 덮기 모드: 누끼 없음 AND 옵션 True --------
+    if (not is_cutout) and overlay_non_alpha:
+        # 순서: 아이템(바닥) → 템플릿(최상단). 그림자 무시.
+        final_img = Image.new("RGBA", template_rgba.size, (0, 0, 0, 0))
 
-    if preset.get("alpha", 0) > 0:
-        # (a) 아이템 알파 추출
-        alpha_mask = item_rgba.getchannel("A")
+        # 아이템은 알파가 실질적으로 없으므로 마스크 없이 그대로 붙임
+        base_layer = Image.new("RGBA", final_img.size, (0, 0, 0, 0))
+        base_layer.paste(item_rgba, (x, y))  # mask 미지정
+        final_img = Image.alpha_composite(final_img, base_layer)
 
-        # (b) 블러
-        blur_radius = int(preset.get("blur", 0))
-        if blur_radius > 0:
-            alpha_blurred = alpha_mask.filter(ImageFilter.GaussianBlur(blur_radius))
-        else:
-            alpha_blurred = alpha_mask
+        # 템플릿을 최상단에 덮기 (템플릿 알파 사용)
+        tpl_layer = Image.new("RGBA", final_img.size, (0, 0, 0, 0))
+        tpl_layer.paste(template_rgba, (0, 0), template_rgba)
+        final_img = Image.alpha_composite(final_img, tpl_layer)
 
-        # (c) 강도 스케일 (0~255)
-        scale = max(0, min(255, int(preset.get("alpha", 0)))) / 255.0
-        alpha_scaled = alpha_blurred.point(lambda p: int(p * scale))
+    else:
+        # -------- (A) 기존 로직: 템플릿을 바닥, 아이템+그림자 위 --------
+        final_img = template_rgba.copy()
 
-        # (d) 검정 RGB + 스케일된 알파로 그림자 RGBA 생성
-        #     RGB는 0(검정), 알파는 alpha_scaled
-        shadow_rgba = Image.new("RGBA", item_rgba.size, (0, 0, 0, 0))
-        shadow_rgba.putalpha(alpha_scaled)
+        # 4) 그림자 프리셋 적용 (항상 아이템 뒤에 먼저 합성)
+        preset_name = str(opts.get("shadow_preset", "off"))
+        preset = SHADOW_PRESETS.get(preset_name, SHADOW_PRESETS["off"])
 
-        # (e) 오프셋 계산 (템플릿 크기 기준, 기존 로직 유지)
-        dx = int(template_rgba.width * float(preset.get("offset_x", 0.0)))
-        dy = int(template_rgba.height * float(preset.get("offset_y", 0.0)))
+        if preset.get("alpha", 0) > 0:
+            # (a) 아이템 알파 추출
+            alpha_mask = item_rgba.getchannel("A")
 
-        # (f) 최종 캔버스에 그림자 합성 (항상 먼저)
-        shadow_layer = Image.new("RGBA", final_img.size, (0, 0, 0, 0))
-        shadow_layer.paste(shadow_rgba, (x + dx, y + dy), shadow_rgba)
-        final_img = Image.alpha_composite(final_img, shadow_layer)
+            # (b) 블러
+            blur_radius = int(preset.get("blur", 0))
+            if blur_radius > 0:
+                alpha_blurred = alpha_mask.filter(ImageFilter.GaussianBlur(blur_radius))
+            else:
+                alpha_blurred = alpha_mask
 
-    # 5) 아이템 합성 (항상 그림자 위에)
-    item_layer = Image.new("RGBA", final_img.size, (0, 0, 0, 0))
-    item_layer.paste(item_rgba, (x, y), item_rgba)
-    final_img = Image.alpha_composite(final_img, item_layer)
+            # (c) 강도 스케일 (0~255)
+            scale = max(0, min(255, int(preset.get("alpha", 0)))) / 255.0
+            alpha_scaled = alpha_blurred.point(lambda p: int(p * scale))
+
+            # (d) 검정 RGB + 스케일된 알파로 그림자 RGBA 생성
+            shadow_rgba = Image.new("RGBA", item_rgba.size, (0, 0, 0, 0))
+            shadow_rgba.putalpha(alpha_scaled)
+
+            # (e) 오프셋 계산 (템플릿 크기 기준, 기존 로직 유지)
+            dx = int(template_rgba.width * float(preset.get("offset_x", 0.0)))
+            dy = int(template_rgba.height * float(preset.get("offset_y", 0.0)))
+
+            # (f) 최종 캔버스에 그림자 합성 (항상 먼저)
+            shadow_layer = Image.new("RGBA", final_img.size, (0, 0, 0, 0))
+            shadow_layer.paste(shadow_rgba, (x + dx, y + dy), shadow_rgba)
+            final_img = Image.alpha_composite(final_img, shadow_layer)
+
+        # 5) 아이템 합성 (항상 그림자 위에)
+        item_layer = Image.new("RGBA", final_img.size, (0, 0, 0, 0))
+        item_layer.paste(item_rgba, (x, y), item_rgba)
+        final_img = Image.alpha_composite(final_img, item_layer)
 
     # 6) 저장
     img_buf = io.BytesIO()

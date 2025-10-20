@@ -72,6 +72,8 @@ def run():
             "dlg_zip_buf": None,
             "dlg_zip_count": 0,
             "dlg_zip_name": "Thumb_Craft_Results.zip",
+            # 신규 옵션 기본값(기존 동작 유지)
+            "allow_non_alpha_overlay": False,
         }
         for k, v in defaults.items():
             st.session_state.setdefault(k, v)
@@ -103,7 +105,8 @@ def run():
         return fps
 
     def _options_signature():
-        return (ss.anchor, float(ss.resize_ratio), ss.shadow_preset)
+        # 신규 옵션 포함(체크박스 토글 시 미리보기 즉시 갱신)
+        return (ss.anchor, float(ss.resize_ratio), ss.shadow_preset, bool(ss.allow_non_alpha_overlay))
 
     # ---- 합성 미리보기 (첫 1장) ----
     def update_preview(item_files, template_files):
@@ -119,18 +122,23 @@ def run():
         template_img = PILImage.open(io.BytesIO(tpl_bytes))
 
         # 투명 배경 체크
-        if not has_useful_alpha(ensure_rgba(item_img)):
+        is_cutout = has_useful_alpha(ensure_rgba(item_img))
+        if (not is_cutout) and (not ss.allow_non_alpha_overlay):
             try:
                 st.toast("투명 배경이 아닌 Item은 미리보기에서 제외됩니다.", icon="⚠️")
             except Exception:
                 st.warning("투명 배경이 아닌 Item은 미리보기에서 제외됩니다.")
             return
 
+        # 옵션에 따라 그림자 프리셋 강제 off(합성 호출에만 적용, UI 라벨/구성은 유지)
+        _shadow = ss.shadow_preset if (is_cutout or not ss.allow_non_alpha_overlay) else "off"
+
         opts = {
             "anchor": ss.anchor,
             "resize_ratio": ss.resize_ratio,
-            "shadow_preset": ss.shadow_preset,
+            "shadow_preset": _shadow,
             "out_format": "PNG",   # 미리보기는 PNG 고정
+            "overlay_template_if_no_alpha": bool(ss.allow_non_alpha_overlay),
         }
         result = compose_one_bytes(item_img, template_img, **opts)
         if not result:
@@ -164,13 +172,6 @@ def run():
         if not item_files or not template_files:
             return
 
-        opts_base = {
-            "anchor": ss.anchor,
-            "resize_ratio": ss.resize_ratio,
-            "shadow_preset": ss.shadow_preset,
-            "out_format": "PNG",
-        }
-
         out = []
         # 아이템 × 템플릿 순회 (과도한 생성 방지 위해 max_count 제한)
         for item_file in item_files:
@@ -178,7 +179,8 @@ def run():
                 break
             try:
                 item_img = PILImage.open(io.BytesIO(item_file.getvalue()))
-                if not has_useful_alpha(ensure_rgba(item_img)):
+                is_cutout = has_useful_alpha(ensure_rgba(item_img))
+                if (not is_cutout) and (not ss.allow_non_alpha_overlay):
                     continue
             except Exception:
                 continue
@@ -191,7 +193,15 @@ def run():
                 except Exception:
                     continue
 
-                result = compose_one_bytes(item_img, template_img, **opts_base)
+                _shadow = ss.shadow_preset if (is_cutout or not ss.allow_non_alpha_overlay) else "off"
+                opts = {
+                    "anchor": ss.anchor,
+                    "resize_ratio": ss.resize_ratio,
+                    "shadow_preset": _shadow,
+                    "out_format": "PNG",
+                    "overlay_template_if_no_alpha": bool(ss.allow_non_alpha_overlay),
+                }
+                result = compose_one_bytes(item_img, template_img, **opts)
                 if not result:
                     continue
 
@@ -210,17 +220,20 @@ def run():
             for item_file in item_files:
                 # 매 루프마다 새로 열기(포인터 이슈 방지)
                 item_img = PILImage.open(io.BytesIO(item_file.getvalue()))
-                if not has_useful_alpha(ensure_rgba(item_img)):
+                is_cutout = has_useful_alpha(ensure_rgba(item_img))
+                if (not is_cutout) and (not ss.allow_non_alpha_overlay):
                     continue
 
                 for template_file in template_files:
                     template_img = PILImage.open(io.BytesIO(template_file.getvalue()))
+                    _shadow = ss.shadow_preset if (is_cutout or not ss.allow_non_alpha_overlay) else "off"
                     opts = {
                         "anchor": ss.anchor,
                         "resize_ratio": ss.resize_ratio,
-                        "shadow_preset": ss.shadow_preset,
+                        "shadow_preset": _shadow,
                         "out_format": fmt,     # "JPEG" 등
                         "quality": quality,    # 100 등
+                        "overlay_template_if_no_alpha": bool(ss.allow_non_alpha_overlay),
                     }
                     result = compose_one_bytes(item_img, template_img, **opts)
                     if result:
@@ -334,7 +347,18 @@ def run():
             key="sel_resize_ratio",
         )
 
-        c3.selectbox("그림자 프리셋", list(SHADOW_PRESETS.keys()), key="shadow_preset")
+        # 그림자 프리셋(라벨/구성 유지). 일반 사진 허용 시 비활성화 + 내부적으로 'off' 적용
+        if ss.allow_non_alpha_overlay:
+            c3.selectbox("그림자 프리셋", list(SHADOW_PRESETS.keys()), key="shadow_preset", disabled=True)
+            ss.shadow_preset = "off"
+        else:
+            c3.selectbox("그림자 프리셋", list(SHADOW_PRESETS.keys()), key="shadow_preset")
+
+        # 신규 옵션(레이아웃/타이틀 유지, 설명 최소 추가)
+        st.checkbox(
+            "일반 사진 허용(누끼 없을 때 템플릿 덮기)",
+            key="allow_non_alpha_overlay",
+        )
 
         # ---- 프리뷰 고정 슬롯(깜빡임 최소화) ----
         preview_header = st.empty()
