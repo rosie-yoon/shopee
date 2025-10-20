@@ -59,14 +59,15 @@ with st.sidebar:
                 st.success("설정이 저장되었습니다!")
                 st.rerun()
 
-        st.write("")  
+    # ⬇️ 폼 바깥: 네모박스 아래 한 줄 여백 + 안내 문구
+    st.write("")  # 한 줄 여백
 
-        st.markdown(
-            """
-        * [상품등록 시트 템플릿](https://docs.google.com/spreadsheets/d/1MP4kpazAQkvGI7Ew31jthKnwjs8WZP0kWhyLPUpTgJA/edit?gid=0#gid=0)의 사본을 생성하여 위 구글 시트 URL 란에 입력해주세요.  
-        * 사본 생성 시, 시트의 안내사항을 꼭 확인해주세요.
+    st.markdown(
         """
-        )
+* [상품등록 시트 템플릿](https://docs.google.com/spreadsheets/d/1MP4kpazAQkvGI7Ew31jthKnwjs8WZP0kWhyLPUpTgJA/edit?gid=0#gid=0)의 사본을 생성하여 위 구글 시트 URL 란에 입력해주세요.  
+* 사본 생성 시, 시트의 안내사항을 꼭 확인해주세요.
+        """
+    )
 
 
 
