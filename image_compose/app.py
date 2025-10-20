@@ -353,11 +353,13 @@ def run():
         )
 
         # 그림자 프리셋(라벨/구성 유지). 일반 사진 허용 시 비활성화 + 내부적으로 'off' 적용
-        if ss.allow_non_alpha_overlay:
-            c3.selectbox("그림자 프리셋", list(SHADOW_PRESETS.keys()), key="shadow_preset", disabled=True)
-            ss.shadow_preset = "off"
-        else:
-            c3.selectbox("그림자 프리셋", list(SHADOW_PRESETS.keys()), key="shadow_preset")
+if ss.allow_non_alpha_overlay:
+    # 👉 위젯 생성 전에 값 강제 세팅(위젯 생성 후 변경 금지 규칙 대응)
+    if st.session_state.get("shadow_preset") != "off":
+        st.session_state["shadow_preset"] = "off"
+    c3.selectbox("그림자 프리셋", list(SHADOW_PRESETS.keys()), key="shadow_preset", disabled=True)
+else:
+    c3.selectbox("그림자 프리셋", list(SHADOW_PRESETS.keys()), key="shadow_preset")
 
                 # ---- 프리뷰 고정 슬롯(깜빡임 최소화)
         preview_header = st.empty()
