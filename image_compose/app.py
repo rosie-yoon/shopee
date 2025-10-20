@@ -19,8 +19,12 @@ BASE_DIR = Path(__file__).resolve().parent
 
 
 # ---------- Streamlit 호환 이미지 렌더 ----------
-def _st_image(img, **kwargs):
-    """Streamlit 버전별 image 인자 호환: use_container_width(신) ↔ use_column_width(구) ↔ 키워드 없이."""
+def _st_image(img, width: int | None = None, **kwargs):
+    """Streamlit 버전별 image 인자 호환.
+    width가 주어지면 컨테이너 폭을 쓰지 않고 해당 픽셀 폭으로 렌더.
+    """
+    if width is not None:
+        return st.image(img, width=width, **kwargs)
     try:
         return st.image(img, use_container_width=True, **kwargs)
     except TypeError:
@@ -57,6 +61,7 @@ def _to_streamlit_image_input(x):
 
 
 def run():
+    PREVIEW_SCALE = 0.5  # 미리보기 렌더링을 50% 크기로
     # set_page_config는 페이지 래퍼에서 호출됨
     st.title("Cover Image")
 
@@ -297,9 +302,11 @@ def run():
             "일반 사진 허용(누끼 없을 때 템플릿 덮기)",
             key="allow_non_alpha_overlay",
         )
+        # 업로드 허용 확장자: 토글 ON이면 JPG/JPEG도 허용
+        _item_types = ["png", "webp"] + (["jpg", "jpeg"] if ss.allow_non_alpha_overlay else [])
         item_files = st.file_uploader(
             "1. Item 이미지 업로드 (누끼 딴 이미지, PNG/WEBP)",
-            type=["png", "webp"],
+            type=_item_types,
             accept_multiple_files=True,
             key=f"item_{ss.item_uploader_key}",
         )
@@ -385,12 +392,23 @@ def run():
                     if st.button("▶", use_container_width=True, key="nav_next"):
                         ss.preview_idx = (ss.preview_idx + 1) % n
             current_bytes = ss.preview_list[ss.preview_idx]
-            _st_image(_to_streamlit_image_input(current_bytes), caption=f"미리보기 #{ss.preview_idx + 1}")
+            # 미리보기 50% 축소 렌더
+            try:
+                _im = PILImage.open(io.BytesIO(current_bytes))
+                _w = int(max(1, _im.width * PREVIEW_SCALE))
+            except Exception:
+                _w = None
+            _st_image(_to_streamlit_image_input(current_bytes), caption=f"미리보기 #{ss.preview_idx + 1}", width=_w)
             preview_hint.empty()
         else:
             img_in = _to_streamlit_image_input(ss.preview_img)
             if img_in is not None:
-                _st_image(img_in, caption="미리보기 (단일)")
+                try:
+                _im = PILImage.open(io.BytesIO(img_in if isinstance(img_in, (bytes, bytearray)) else img_in.getvalue()))
+                _w = int(max(1, _im.width * PREVIEW_SCALE))
+            except Exception:
+                _w = None
+            _st_image(img_in, caption="미리보기 (단일)", width=_w)
                 preview_hint.caption("업로드/설정 변경 시 자동으로 여러 장 미리보기를 생성합니다.")
             else:
                 preview_image.empty()
