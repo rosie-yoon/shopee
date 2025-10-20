@@ -61,7 +61,7 @@ def _to_streamlit_image_input(x):
 
 
 def run():
-    PREVIEW_SCALE = 0.5  # 미리보기 렌더링을 50% 크기로
+    PREVIEW_SCALE = 0.3  # 미리보기 렌더링을 50% 크기로
     # set_page_config는 페이지 래퍼에서 호출됨
     st.title("Cover Image")
 
