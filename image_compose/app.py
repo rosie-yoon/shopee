@@ -5,10 +5,15 @@ import io
 import zipfile
 
 import streamlit as st
-from PIL import Image as PILImage  # 별칭 통일
+from PIL import Image as PILImage
 
-# 내부 유틸
-from image_compose.composer_utils import compose_one_bytes, SHADOW_PRESETS, has_useful_alpha, ensure_rgba
+# 내부 유틸 (절대 임포트로 고정)
+from image_compose.composer_utils import (
+    compose_one_bytes,
+    SHADOW_PRESETS,
+    has_useful_alpha,
+    ensure_rgba,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -36,12 +41,12 @@ def _to_streamlit_image_input(x):
         return x
     if isinstance(x, PILImage.Image):
         return x
-    if hasattr(x, "getvalue"):  # BytesIO 등
+    if hasattr(x, "getvalue"):
         try:
             return x.getvalue()
         except Exception:
             pass
-    if hasattr(x, "read"):      # 파일 객체
+    if hasattr(x, "read"):
         try:
             return x.read()
         except Exception:
@@ -59,20 +64,19 @@ def run():
     def init_state():
         defaults = {
             "anchor": "center",
-            "resize_ratio": 1.0,       # 기본 100%
+            "resize_ratio": 1.0,
             "shadow_preset": "off",
             "item_uploader_key": 0,
             "template_uploader_key": 0,
-            "preview_img": None,       # bytes (단일 미리보기)
-            "preview_list": [],        # bytes 리스트 (다중 미리보기)
-            "preview_idx": 0,          # 다중 미리보기 인덱스
-            "preview_sig": None,       # 현재 미리보기 입력/옵션의 시그니처 (라이브 갱신용)
-            # 다운로드 다이얼로그 캐시
+            "preview_img": None,
+            "preview_list": [],
+            "preview_idx": 0,
+            "preview_sig": None,
             "dlg_zip_sig": None,
             "dlg_zip_buf": None,
             "dlg_zip_count": 0,
             "dlg_zip_name": "Thumb_Craft_Results.zip",
-            # 신규 옵션 기본값(기존 동작 유지)
+            # 신규 옵션: 기본 False로 기존 동작 유지
             "allow_non_alpha_overlay": False,
         }
         for k, v in defaults.items():
@@ -83,7 +87,6 @@ def run():
 
     # ---------- 유틸: 파일/옵션 시그니처 ----------
     def _files_fingerprint(files):
-        """UploadedFile 리스트를 간단한 해시(이름+크기)로 요약."""
         if not files:
             return []
         fps = []
@@ -105,23 +108,24 @@ def run():
         return fps
 
     def _options_signature():
-        # 신규 옵션 포함(체크박스 토글 시 미리보기 즉시 갱신)
-        return (ss.anchor, float(ss.resize_ratio), ss.shadow_preset, bool(ss.allow_non_alpha_overlay))
+        return (
+            ss.anchor,
+            float(ss.resize_ratio),
+            ss.shadow_preset,
+            bool(ss.allow_non_alpha_overlay),
+        )
 
-    # ---- 합성 미리보기 (첫 1장)
+    # ---- 합성 미리보기 (첫 1장) ----
     def update_preview(item_files, template_files):
-        """업로드된 첫 번째 아이템/템플릿으로 미리보기 1장을 만들어 ss.preview_img(bytes)에 저장."""
         ss.preview_img = None
         if not item_files or not template_files:
             return
 
-        # UploadedFile → bytes → BytesIO → PILImage (포인터 이슈 방지)
         item_bytes = item_files[0].getvalue()
-        tpl_bytes  = template_files[0].getvalue()
+        tpl_bytes = template_files[0].getvalue()
         item_img = PILImage.open(io.BytesIO(item_bytes))
         template_img = PILImage.open(io.BytesIO(tpl_bytes))
 
-        # 투명 배경 체크
         is_cutout = has_useful_alpha(ensure_rgba(item_img))
         if (not is_cutout) and (not ss.allow_non_alpha_overlay):
             try:
@@ -130,14 +134,14 @@ def run():
                 st.warning("투명 배경이 아닌 Item은 미리보기에서 제외됩니다.")
             return
 
-        # 옵션에 따라 그림자 프리셋 강제 off(합성 호출에만 적용, UI 라벨/구성은 유지)
+        # 토글 ON + 누끼 없음이면 shadow는 호출 시점에만 off 처리
         _shadow = ss.shadow_preset if (is_cutout or not ss.allow_non_alpha_overlay) else "off"
 
         opts = {
             "anchor": ss.anchor,
             "resize_ratio": ss.resize_ratio,
             "shadow_preset": _shadow,
-            "out_format": "PNG",   # 미리보기는 PNG 고정
+            "out_format": "PNG",
             "overlay_template_if_no_alpha": bool(ss.allow_non_alpha_overlay),
         }
         result = compose_one_bytes(item_img, template_img, **opts)
@@ -145,7 +149,6 @@ def run():
             ss.preview_img = None
             return
 
-        # compose_one_bytes → (BytesIO, ext) 형태 가정
         data = None
         if isinstance(result, tuple) and len(result) >= 1:
             buf = result[0]
@@ -163,17 +166,14 @@ def run():
             data = bytes(result)
         ss.preview_img = data
 
-    # ---- 다중 미리보기 생성 (자동/실시간)
+    # ---- 다중 미리보기 생성 ----
     def generate_preview_list(item_files, template_files, max_count: int = 12):
-        """업로드된 아이템 × 템플릿 조합으로 최대 max_count장의 미리보기(bytes) 생성."""
         ss.preview_list = []
         ss.preview_idx = 0
-
         if not item_files or not template_files:
             return
 
         out = []
-        # 아이템 × 템플릿 순회 (과도한 생성 방지 위해 max_count 제한)
         for item_file in item_files:
             if len(out) >= max_count:
                 break
@@ -204,21 +204,18 @@ def run():
                 result = compose_one_bytes(item_img, template_img, **opts)
                 if not result:
                     continue
-
                 buf = result[0]
                 data = buf.getvalue() if hasattr(buf, "getvalue") else (bytes(buf) if isinstance(buf, (bytes, bytearray)) else None)
                 if data:
                     out.append(data)
-
         ss.preview_list = out
 
     # ---- 배치 합성 & Zip 생성 ----
     def run_batch_composition(item_files, template_files, fmt, quality, shop_variable):
         zip_buf = io.BytesIO()
         count = 0
-        with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        with zipfile.ZipFile(zip_buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             for item_file in item_files:
-                # 매 루프마다 새로 열기(포인터 이슈 방지)
                 item_img = PILImage.open(io.BytesIO(item_file.getvalue()))
                 is_cutout = has_useful_alpha(ensure_rgba(item_img))
                 if (not is_cutout) and (not ss.allow_non_alpha_overlay):
@@ -231,41 +228,36 @@ def run():
                         "anchor": ss.anchor,
                         "resize_ratio": ss.resize_ratio,
                         "shadow_preset": _shadow,
-                        "out_format": fmt,     # "JPEG" 등
-                        "quality": quality,    # 100 등
+                        "out_format": fmt,
+                        "quality": quality,
                         "overlay_template_if_no_alpha": bool(ss.allow_non_alpha_overlay),
                     }
                     result = compose_one_bytes(item_img, template_img, **opts)
                     if result:
-                        img_buf, ext = result  # img_buf: BytesIO
+                        img_buf, ext = result
                         item_name = Path(item_file.name).stem
                         shop_var = shop_variable if shop_variable else Path(template_file.name).stem
                         filename = f"{item_name}_C_{shop_var}.{ext}"
                         zf.writestr(filename, img_buf.getvalue())
                         count += 1
-
         zip_buf.seek(0)
         return zip_buf, count
 
-    # ---- 다운로드 다이얼로그 (샵코드 → 즉시 다운로드, 클릭 후 자동 닫기)
+    # ---- 다운로드 다이얼로그 ----
     @st.dialog("출력 설정")
     def show_save_dialog(item_files, template_files):
         st.caption("샵코드를 입력하고 ‘다운로드’를 누르면 Zip 파일이 저장됩니다.")
-
         shop_variable = st.text_input(
             "Shop 구분값 (선택)",
             key="dialog_shop_var",
             help="입력 시 'Item_C_구분값.jpg' 형식으로 저장됩니다.",
         )
-
-        # zip 캐시 시그니처: 파일/옵션/샵코드
         cur_sig = (
             tuple(_files_fingerprint(item_files)),
             tuple(_files_fingerprint(template_files)),
             _options_signature(),
             shop_variable or "",
         )
-
         need_build = (ss.get("dlg_zip_sig") != cur_sig)
         if need_build:
             if not item_files or not template_files:
@@ -282,9 +274,7 @@ def run():
             ss.dlg_zip_buf = zip_buf
             ss.dlg_zip_count = count
             ss.dlg_zip_name = f"Thumb_Craft_Results_{shop_variable}.zip" if shop_variable else "Thumb_Craft_Results.zip"
-
         st.success(f"총 {ss.get('dlg_zip_count', 0)}개의 이미지가 준비되었습니다.")
-
         clicked = st.download_button(
             "다운로드",
             ss.dlg_zip_buf,
@@ -294,10 +284,7 @@ def run():
             key="dl_zip_btn",
         )
         st.caption("※ 샵코드를 바꾸면 Zip이 자동으로 갱신됩니다.")
-
-        # 다운로드 클릭 시 자동 닫기
         if clicked:
-            # 다이얼로그 밖에서 재호출되지 않으므로, rerun 한 번으로 자연스럽게 닫힘
             st.rerun()
 
     # ---- UI 레이아웃 ----
@@ -305,7 +292,7 @@ def run():
 
     with left:
         st.subheader("이미지 업로드")
-        # ⬇️ 일반 사진 허용 토글 위치 이동: 업로드 타이틀 바로 아래
+        # 일반 사진 허용 토글: 업로드 타이틀 바로 아래
         st.checkbox(
             "일반 사진 허용(누끼 없을 때 템플릿 덮기)",
             key="allow_non_alpha_overlay",
@@ -317,8 +304,7 @@ def run():
             key=f"item_{ss.item_uploader_key}",
         )
         if st.button("아이템 리스트 삭제", key="btn_clear_items"):
-            ss.item_uploader_key += 1  # 버튼 자체가 rerun 유발
-
+            ss.item_uploader_key += 1
         template_files = st.file_uploader(
             "2. Template 이미지 업로드",
             type=["png", "jpg", "jpeg", "webp"],
@@ -333,12 +319,19 @@ def run():
         c1, c2, c3 = st.columns(3)
         c1.selectbox(
             "배치 위치",
-            ["center", "top", "bottom", "left", "right",
-             "top-left", "top-right", "bottom-left", "bottom-right"],
+            [
+                "center",
+                "top",
+                "bottom",
+                "left",
+                "right",
+                "top-left",
+                "top-right",
+                "bottom-left",
+                "bottom-right",
+            ],
             key="anchor",
         )
-
-        # 리사이즈 (확대 포함 + 100% 기본)
         resize_options = [1.3, 1.2, 1.1, 1.0, 0.9, 0.8, 0.7]
         if "resize_ratio" not in ss:
             ss["resize_ratio"] = 1.0
@@ -351,35 +344,28 @@ def run():
             format_func=lambda x: f"{int(round(x*100))}%",
             key="sel_resize_ratio",
         )
+        # 위젯 생성 전에 값 강제 세팅 → disabled selectbox 렌더
+        if ss.allow_non_alpha_overlay and st.session_state.get("shadow_preset") != "off":
+            st.session_state["shadow_preset"] = "off"
+        if ss.allow_non_alpha_overlay:
+            c3.selectbox("그림자 프리셋", list(SHADOW_PRESETS.keys()), key="shadow_preset", disabled=True)
+        else:
+            c3.selectbox("그림자 프리셋", list(SHADOW_PRESETS.keys()), key="shadow_preset")
 
-        # 그림자 프리셋(라벨/구성 유지). 일반 사진 허용 시 비활성화 + 내부적으로 'off' 적용
-if ss.allow_non_alpha_overlay:
-    # 👉 위젯 생성 전에 값 강제 세팅(위젯 생성 후 변경 금지 규칙 대응)
-    if st.session_state.get("shadow_preset") != "off":
-        st.session_state["shadow_preset"] = "off"
-    c3.selectbox("그림자 프리셋", list(SHADOW_PRESETS.keys()), key="shadow_preset", disabled=True)
-else:
-    c3.selectbox("그림자 프리셋", list(SHADOW_PRESETS.keys()), key="shadow_preset")
-
-                # ---- 프리뷰 고정 슬롯(깜빡임 최소화)
+        # ---- 프리뷰 고정 슬롯(깜빡임 최소화) ----
         preview_header = st.empty()
-        preview_nav    = st.empty()
-        preview_image  = st.empty()
-        preview_hint   = st.empty()
-
-        preview_header.subheader("미리보기")
-        preview_header = st.empty()
-        preview_nav    = st.empty()
-        preview_image  = st.empty()
-        preview_hint   = st.empty()
+        preview_nav = st.empty()
+        preview_image = st.empty()
+        preview_hint = st.empty()
 
         preview_header.subheader("미리보기")
 
         # ---- 실시간 적용: 입력/옵션 시그니처를 기준으로 자동 갱신 ----
-        cur_sig = (tuple(_files_fingerprint(item_files)),
-                   tuple(_files_fingerprint(template_files)),
-                   _options_signature())
-
+        cur_sig = (
+            tuple(_files_fingerprint(item_files)),
+            tuple(_files_fingerprint(template_files)),
+            _options_signature(),
+        )
         if cur_sig != ss.preview_sig:
             update_preview(item_files, template_files)
             generate_preview_list(item_files, template_files)
@@ -398,7 +384,6 @@ else:
                 with cnext:
                     if st.button("▶", use_container_width=True, key="nav_next"):
                         ss.preview_idx = (ss.preview_idx + 1) % n
-
             current_bytes = ss.preview_list[ss.preview_idx]
             _st_image(_to_streamlit_image_input(current_bytes), caption=f"미리보기 #{ss.preview_idx + 1}")
             preview_hint.empty()
@@ -411,7 +396,6 @@ else:
                 preview_image.empty()
                 preview_hint.caption("파일을 업로드하면 미리보기가 표시됩니다.")
 
-        # ---- 이미지 생성(= 다운로드 대화상자 열기)
         st.button(
             "이미지 생성",
             type="primary",
@@ -421,8 +405,7 @@ else:
             on_click=lambda: show_save_dialog(item_files, template_files),
         )
 
-    # 바닥의 예전 Zip 다운로드 섹션은 제거 (대화상자에서 즉시 다운로드)
-    # if ss.get("download_info"): ...  <-- 사용 안 함
+    # 바닥의 예전 Zip 다운로드 섹션은 사용하지 않음
 
 
 if __name__ == "__main__":
