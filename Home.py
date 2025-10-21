@@ -123,7 +123,7 @@ cards = [
         "icon": ICONS["create"],
         "title": "Create Template",
         "desc": "신규 상품 Mass Upload 템플릿 생성",
-        "path": "pages/3_Create Items.py",
+        "path": "pages/3_Create Template.py",
     },
 ]
 
