@@ -5,6 +5,17 @@ from pathlib import Path
 from urllib.parse import quote
 import streamlit as st
 
+# --- import path fix (Streamlit Cloud 호환) ---
+import sys
+from pathlib import Path
+ROOT = Path(__file__).resolve().parent  # /mount/src/shopee
+PARENT = ROOT.parent                    # /mount/src
+for p in (ROOT, PARENT):
+    if str(p) not in sys.path:
+        sys.path.insert(0, str(p))
+# ----------------------------------------------
+
+
 from user_manager import is_logged_in, login, logout
 
 # --------------------------------------------------------------------
