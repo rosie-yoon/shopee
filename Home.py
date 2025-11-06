@@ -6,8 +6,7 @@ from urllib.parse import quote
 import streamlit as st
 
 from ui_theme import apply_theme  # 공통 테마
-# ✅ 추가: 로그인/로그아웃 유틸
-from user_manager import is_logged_in, logout
+from user_manager import is_logged_in, login, logout
 
 # --------------------------------------------------------------------
 # 기본 설정 + 홈에서는 사이드바 완전 숨김
@@ -18,31 +17,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 apply_theme(hide_sidebar=True)
-
-# ✅ 로그인 가드: 네비게이션 처리 전에 차단
-if not is_logged_in():
-    st.warning("로그인이 필요합니다. 아래 버튼을 눌러 로그인 페이지로 이동하세요.")
-    if st.button("로그인 페이지로 이동", type="primary"):
-        st.switch_page("pages/0_Login.py")
-    st.stop()
-
-# --------------------------------------------------------------------
-# 쿼리 파라미터로 페이지 전환 (카드 전체 클릭용)
-# --------------------------------------------------------------------
-def get_nav_target() -> str | None:
-    # Streamlit 버전 호환: query_params / experimental_get_query_params
-    try:
-        nav = st.query_params.get("nav", None)
-        if isinstance(nav, list):
-            nav = nav[0] if nav else None
-    except Exception:
-        nav = st.experimental_get_query_params().get("nav", [None])[0]
-    return nav
-
-target = get_nav_target()
-if target:
-    # 예: target == "pages/3_Create Items.py"
-    st.switch_page(target)
 
 # --------------------------------------------------------------------
 # 아이콘 유틸
@@ -55,8 +29,11 @@ def resolve_icon(name: str) -> Path:
     return hi if hi.exists() else lo
 
 def icon_b64(path: Path) -> str:
-    with open(path, "rb") as f:
-        return base64.b64encode(f.read()).decode()
+    try:
+        with open(path, "rb") as f:
+            return base64.b64encode(f.read()).decode()
+    except Exception:
+        return ""
 
 ICONS = {
     "cover":  resolve_icon("cover"),
@@ -65,8 +42,62 @@ ICONS = {
 }
 
 # --------------------------------------------------------------------
-# 페이지 전용 스타일 (카드만)
+# 로그인 섹션 (미로그인 시)
 # --------------------------------------------------------------------
+st.title("Shopee Support Tools")
+st.divider()
+
+if not is_logged_in():
+    st.subheader("🔐 Login")
+    username = st.text_input("사용자 이름을 입력하세요", placeholder="예: yeojin")
+    if st.button("로그인", type="primary", use_container_width=False) and username.strip():
+        if login(username.strip()):
+            st.success("로그인 성공!")
+            st.rerun()
+        else:
+            st.error("등록되지 않은 사용자입니다. 관리자에게 문의하세요.")
+    # 로그인 전에는 아래 콘텐츠 숨김
+    st.caption("버전: v3")
+    st.stop()
+
+# --------------------------------------------------------------------
+# (로그인 상태) 상단 로그아웃 버튼
+# --------------------------------------------------------------------
+left, mid, right = st.columns([6, 4, 2])
+with left:
+    st.subheader("환영합니다 👋")
+with right:
+    if st.button("로그아웃"):
+        logout()
+        st.rerun()
+
+st.divider()
+
+# --------------------------------------------------------------------
+# 카드 목록
+# --------------------------------------------------------------------
+cards = [
+    {
+        "icon": ICONS["cover"],
+        "title": "Cover Image",
+        "desc": "썸네일로 사용할 커버 이미지 생성",
+        "path": "pages/1_Cover Image.py",
+    },
+    {
+        "icon": ICONS["copy"],
+        "title": "Copy Template",
+        "desc": "복제용 Mass Upload 템플릿 생성",
+        "path": "pages/2_Copy Template.py",
+    },
+    {
+        "icon": ICONS["create"],
+        "title": "Create Template",
+        "desc": "신규 상품 Mass Upload 템플릿 생성",
+        "path": "pages/3_Create Template.py",
+    },
+]
+
+# 페이지 전용 스타일 (카드)
 st.markdown(
     """
     <style>
@@ -91,45 +122,10 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# --------------------------------------------------------------------
-# 본문
-# --------------------------------------------------------------------
-# 상단 타이틀 + 우측 로그아웃 버튼
-left, mid, right = st.columns([6, 4, 2])
-with left:
-    st.title("Shopee Support Tools")
-with right:
-    if st.button("로그아웃"):
-        logout()
-        st.switch_page("pages/0_Login.py")
-
-st.divider()
-
-cards = [
-    {
-        "icon": ICONS["cover"],
-        "title": "Cover Image",
-        "desc": "썸네일로 사용할 커버 이미지 생성",
-        "path": "pages/1_Cover Image.py",
-    },
-    {
-        "icon": ICONS["copy"],
-        "title": "Copy Template",
-        "desc": "복제용 Mass Upload 템플릿 생성",
-        "path": "pages/2_Copy Template.py",
-    },
-    {
-        "icon": ICONS["create"],
-        "title": "Create Template",
-        "desc": "신규 상품 Mass Upload 템플릿 생성",
-        "path": "pages/3_Create Template.py",
-    },
-]
-
 cols = st.columns(3)
 for col, c in zip(cols, cards):
     with col:
-        b64 = icon_b64(c["icon"]) if Path(c["icon"]).exists() else ""
+        b64 = icon_b64(c["icon"])
         href = f"?nav={quote(c['path'])}"
         st.markdown(
             f"""
@@ -147,4 +143,4 @@ for col, c in zip(cols, cards):
         )
 
 st.divider()
-st.caption("Version: v3")
+st.caption("버전: v3")

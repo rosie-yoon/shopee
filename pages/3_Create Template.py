@@ -32,16 +32,28 @@ from shopee_creator.creation_steps import export_tem_xlsx  # XLSX만 사용
 # 접근 제한 & 프로필 사이드바 / 사용자 프로필 → 세션 기본값
 # ──────────────────────────────────────────────────────────────────────────────
 if not is_logged_in():
-    st.warning("로그인이 필요합니다. 먼저 로그인 페이지에서 사용자명을 입력해 주세요.")
+    st.warning("로그인이 필요합니다. 먼저 사용자명을 입력해 로그인해 주세요.")
     st.stop()
 
-# 공통 프로필 사이드바 (사용자가 시트/호스팅 URL을 변경·저장 가능)
-render_profile_sidebar()
+# 공통 프로필 사이드바 (Create 전용 키로 저장/로드)
+#  - users.json 예시: create_sheet_id / create_image_host
+render_profile_sidebar(
+    sheet_key="create_sheet_id",
+    host_key="create_image_host",
+    sheet_label="상품등록 시트 URL",
+    host_label="Image Hosting URL",
+)
 
-# 🔁 로그인한 사용자의 프로필을 이 페이지에서 사용하는 세션 키로 매핑
-#    - 기존 Copy/Upload 쪽 키와 달라서 여기서 이름을 맞춰줍니다.
-st.session_state.setdefault("SOURCE_SPREADSHEET_ID", get_user_pref("sheet_id"))
-st.session_state.setdefault("IMAGE_BASE_URL",       get_user_pref("image_host"))
+# 로그인 사용자 프로필을 이 페이지에서 사용하는 세션 키로 매핑
+#  - 폴백: 기존 sheet_id/image_host 또는 default_image_host 사용
+st.session_state.setdefault(
+    "SOURCE_SPREADSHEET_ID",
+    get_user_pref("create_sheet_id") or get_user_pref("sheet_id")
+)
+st.session_state.setdefault(
+    "IMAGE_BASE_URL",
+    get_user_pref("create_image_host") or get_user_pref("image_host") or get_user_pref("default_image_host")
+)
 
 # 다운로드 바이트 세션 기본값 (XLSX만)
 st.session_state.setdefault("DL_XLSX", None)

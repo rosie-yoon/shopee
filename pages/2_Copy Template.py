@@ -15,21 +15,27 @@ if str(ROOT) not in sys.path:
 from user_manager import is_logged_in, get_user_pref
 from profile_sidebar import render_profile_sidebar
 
-# 내부 모듈 임포트
+# 내부 모듈
 from item_uploader.app import run as item_uploader_run
 
 # ✅ 접근 제한: 로그인 안 했으면 차단
 if not is_logged_in():
-    st.warning("로그인이 필요합니다. 먼저 로그인 페이지에서 사용자명을 입력해 주세요.")
+    st.warning("로그인이 필요합니다. 먼저 로그인해 주세요.")
     st.stop()
 
-# ✅ 공통 프로필 사이드바 (여기서 사용자별 시트/호스팅 URL을 수정·저장 가능)
-render_profile_sidebar()
+# ✅ 공통 프로필 사이드바 (Copy 전용 키로 저장/로드)
+#    - users.json 예: copy_sheet_id / copy_image_host (없으면 기존 sheet_id/image_host로 폴백)
+render_profile_sidebar(sheet_key="copy_sheet_id", host_key="copy_image_host")
 
-# ✅ 로그인 사용자 프로필을 세션 기본값으로 주입
-#    - item_uploader는 실행 시 이 값을 사용함
-st.session_state.setdefault("GOOGLE_SHEETS_SPREADSHEET_ID", get_user_pref("sheet_id"))
-st.session_state.setdefault("IMAGE_HOSTING_URL", get_user_pref("image_host"))
+# ✅ 사용자 프로필 → 세션 기본값 주입 (item_uploader가 사용)
+st.session_state.setdefault(
+    "GOOGLE_SHEETS_SPREADSHEET_ID",
+    get_user_pref("copy_sheet_id") or get_user_pref("sheet_id")
+)
+st.session_state.setdefault(
+    "IMAGE_HOSTING_URL",
+    get_user_pref("copy_image_host") or get_user_pref("image_host") or get_user_pref("default_image_host")
+)
 
 # (선택) 안내 문구
 with st.sidebar:
