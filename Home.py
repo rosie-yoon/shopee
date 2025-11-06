@@ -75,9 +75,9 @@ if not is_logged_in():
     st.caption("버전: v3.2")
     st.stop()
 
-# --------------------------------------------------------------------
-# (로그인 상태) 상단 로그아웃 버튼
-# --------------------------------------------------------------------
+# ... (위 내용 동일)
+
+# 로그인 상태에서만 도달
 left, mid, right = st.columns([6, 4, 2])
 with left:
     st.subheader("환영합니다 👋")
@@ -88,90 +88,42 @@ with right:
 
 st.divider()
 
-# --------------------------------------------------------------------
-# 카드 목록
-# --------------------------------------------------------------------
+# 현재 로그인 사용자 쿼리 유지용
+try:
+    q = st.query_params
+except Exception:
+    q = st.experimental_get_query_params()
+user_q = q.get("user")
+user_q = (user_q[0] if isinstance(user_q, list) else user_q) if user_q else None
+
 cards = [
-    {
-        "icon": ICONS["cover"],
-        "title": "Cover Image",
-        "desc": "썸네일로 사용할 커버 이미지 생성",
-        "path": "pages/1_Cover Image.py",
-    },
-    {
-        "icon": ICONS["copy"],
-        "title": "Copy Template",
-        "desc": "복제용 Mass Upload 템플릿 생성",
-        "path": "pages/2_Copy Template.py",
-    },
-    {
-        "icon": ICONS["create"],
-        "title": "Create Template",
-        "desc": "신규 상품 Mass Upload 템플릿 생성",
-        "path": "pages/3_Create Template.py",
-    },
+    {"icon": ICONS["cover"],  "title": "Cover Image",  "desc": "썸네일로 사용할 커버 이미지 생성",     "path": "pages/1_Cover Image.py"},
+    {"icon": ICONS["copy"],   "title": "Copy Template","desc": "복제용 Mass Upload 템플릿 생성",     "path": "pages/2_Copy Template.py"},
+    {"icon": ICONS["create"], "title": "Create Template","desc":"신규 상품 Mass Upload 템플릿 생성", "path": "pages/3_Create Template.py"},
 ]
 
-st.markdown(
-    """
-    <style>
-      .ui-card{
-        background: #ffffff; /* 흰색 카드 배경 */
-        border-radius:16px;
-        padding:14px 16px 16px;
-        box-shadow:0 4px 18px rgba(0,0,0,.1);
-        transition: transform .15s ease, background .25s ease;
-        min-height: 130px;
-      }
-      .ui-card:hover{
-        background: #f9fafb; /* hover 시 살짝 밝은 회색 */
-        transform: translateY(-1px);
-      }
-
-      a.card-link{
-        display:block;
-        text-decoration:none !important;
-        color:inherit !important;
-        -webkit-tap-highlight-color: transparent;
-        outline:none !important;
-      }
-      a.card-link:hover, a.card-link:active, a.card-link *{
-        text-decoration:none !important;
-      }
-
-      .row{
-        display:flex;
-        align-items:center;
-        gap:10px;
-        margin-bottom:6px;
-      }
-      .row img{
-        width:36px;
-        height:36px;
-        flex:0 0 auto;
-      }
-      .row .title{
-        font-weight:800;
-        font-size:1.1rem;
-        margin:0;
-        color:#111827; /* 검정색 텍스트 (Gray-900) */
-      }
-
-      .desc{
-        margin:0;
-        color:#374151; /* 진한 회색 (Gray-700) */
-      }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
+st.markdown("""
+<style>
+  .ui-card{ background:#ffffff;border-radius:16px;padding:14px 16px 16px;
+            box-shadow:0 4px 18px rgba(0,0,0,.1);min-height:130px;transition:transform .15s}
+  .ui-card:hover{ background:#f9fafb; transform:translateY(-1px) }
+  a.card-link{ display:block; text-decoration:none !important; color:inherit !important; }
+  .row{ display:flex; align-items:center; gap:10px; margin-bottom:6px; }
+  .row img{ width:36px; height:36px; }
+  .row .title{ font-weight:800; font-size:1.1rem; margin:0; color:#111827; }
+  .desc{ margin:0; color:#374151; }
+</style>
+""", unsafe_allow_html=True)
 
 cols = st.columns(3)
 for col, c in zip(cols, cards):
     with col:
         b64 = icon_b64(c["icon"])
-        href = f"?nav={quote(c['path'])}"
+        # ✅ user 쿼리를 보존해서 넘김
+        if user_q:
+            href = f"?user={quote(user_q)}&nav={quote(c['path'])}"
+        else:
+            href = f"?nav={quote(c['path'])}"
         st.markdown(
             f"""
             <a class="card-link" href="{href}" target="_self" rel="noopener">
