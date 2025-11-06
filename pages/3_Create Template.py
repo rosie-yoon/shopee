@@ -9,67 +9,23 @@ from contextlib import redirect_stdout
 import traceback
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Page config & import path
+# Page config & import path (로컬/Cloud 공통)
 # ──────────────────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Create Template", layout="wide")
 
-# ✅ 경로 설정 (Cloud 호환)
-ROOT = Path(__file__).resolve().parents[1]  # .../shopee
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-PARENT = ROOT.parent  # /mount/src
-if str(PARENT) not in sys.path:
-    sys.path.insert(0, str(PARENT))
-
-# ✅ Streamlit Cloud & Local 호환 경로 처리
 ROOT = Path(__file__).resolve().parents[1]   # .../shopee
-PACKAGE_NAME = ROOT.name                     # "shopee"
-PARENT = ROOT.parent                         # /mount/src
-
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-if str(PARENT) not in sys.path:
-    sys.path.insert(0, str(PARENT))
-
-# ✅ 안전한 임포트 함수
-def import_module_safe():
-    try:
-        from profile_sidebar import render_profile_sidebar
-        return render_profile_sidebar
-    except ModuleNotFoundError:
-        try:
-            # Cloud 패키지 모드
-            mod = __import__(f"{PACKAGE_NAME}.profile_sidebar", fromlist=["render_profile_sidebar"])
-            return getattr(mod, "render_profile_sidebar")
-        except Exception as e:
-            st.error(f"profile_sidebar 임포트 실패: {e}")
-            st.stop()
-
-# ✅ 실제 임포트 실행
-render_profile_sidebar = import_module_safe()
-
-# (상단 user_manager 동적 임포트 부분)
-try:
-    from user_manager import is_logged_in, get_user_pref, ensure_login_persistence
-except ModuleNotFoundError:
-    mod = __import__(
-        f"{Path(__file__).resolve().parents[1].name}.user_manager",
-        fromlist=["is_logged_in", "get_user_pref", "ensure_login_persistence"]
-    )
-    is_logged_in = getattr(mod, "is_logged_in")
-    get_user_pref = getattr(mod, "get_user_pref")
-    ensure_login_persistence = getattr(mod, "ensure_login_persistence")
-except ModuleNotFoundError:
-    mod = __import__(f"{PACKAGE_NAME}.user_manager", fromlist=["is_logged_in", "get_user_pref", "ensure_login_persistence"])
-    is_logged_in = getattr(mod, "is_logged_in")
-    get_user_pref = getattr(mod, "get_user_pref")
-    ensure_login_persistence = getattr(mod, "ensure_login_persistence")
-
+PARENT = ROOT.parent                          # .../mount/src
+for p in (ROOT, PARENT):
+    if str(p) not in sys.path:
+        sys.path.insert(0, str(p))
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 프로젝트 모듈
+# 핵심 임포트 (심플 버전)
+#   - profile_sidebar.py는 자급자족 버전이어야 함(외부 유틸 미의존)
 # ──────────────────────────────────────────────────────────────────────────────
+from user_manager import is_logged_in, get_user_pref, ensure_login_persistence
+from profile_sidebar import render_profile_sidebar
+
 from shopee_creator.controller import ShopeeCreator
 from shopee_creator.utils_creator import extract_sheet_id, get_env
 import shopee_creator.creation_steps as steps
@@ -78,14 +34,13 @@ from shopee_creator.creation_steps import export_tem_xlsx  # XLSX만 사용
 # ──────────────────────────────────────────────────────────────────────────────
 # 접근 제한 & 프로필 사이드바 / 사용자 프로필 → 세션 기본값
 # ──────────────────────────────────────────────────────────────────────────────
-# 접근 제한 직전
-ensure_login_persistence()   # ✅ 여기!
+ensure_login_persistence()   # URL의 ?user= 로 세션 복원
 if not is_logged_in():
     st.warning("로그인이 필요합니다. 먼저 사용자명을 입력해 로그인해 주세요.")
     st.stop()
 
-# ✅ 공통 프로필 사이드바 (Create 전용 키로 저장/로드)
-#  - users.json 예시: create_sheet_id / create_image_host
+# 공통 프로필 사이드바 (Create 전용 키로 저장/로드)
+#  - users.json 키: create_sheet_id / create_image_host
 render_profile_sidebar(
     sheet_key="create_sheet_id",
     host_key="create_image_host",
@@ -93,7 +48,7 @@ render_profile_sidebar(
     host_label="Image Hosting URL",
 )
 
-# ✅ 로그인 사용자 프로필 → 세션 매핑
+# 로그인 사용자 프로필 → 세션 매핑
 st.session_state.setdefault(
     "SOURCE_SPREADSHEET_ID",
     get_user_pref("create_sheet_id") or get_user_pref("sheet_id")
