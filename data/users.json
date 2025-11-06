@@ -1,0 +1,12 @@
+{
+  "Admin": {
+    "display_name": "Admin",
+    "sheet_id": "1abcDEFxyz...",
+    "image_host": "https://unisiashop.com/"
+  },
+  "컴포트존": {
+    "display_name": "컴포트존",
+    "sheet_id": "1ghijkLMN...",
+    "image_host": "https://shopeept.com/"
+  }
+}
