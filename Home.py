@@ -115,25 +115,56 @@ st.markdown(
     """
     <style>
       .ui-card{
-        background: rgba(255,255,255,.08);
-        backdrop-filter: blur(10px);
-        -webkit-backdrop-filter: blur(10px);
-        border-radius:16px; padding:14px 16px 16px;
-        box-shadow:0 4px 18px rgba(0,0,0,.25), inset 0 0 0 1px rgba(255,255,255,.05);
+        background: #ffffff; /* 흰색 카드 배경 */
+        border-radius:16px;
+        padding:14px 16px 16px;
+        box-shadow:0 4px 18px rgba(0,0,0,.1);
         transition: transform .15s ease, background .25s ease;
         min-height: 130px;
       }
-      .ui-card:hover{ background: rgba(255,255,255,.12); transform: translateY(-1px); }
-      a.card-link{ display:block; text-decoration:none !important; color:inherit !important; -webkit-tap-highlight-color: transparent; outline:none !important; }
-      a.card-link:hover, a.card-link:active, a.card-link *{ text-decoration:none !important; }
-      .row{ display:flex; align-items:center; gap:10px; margin-bottom:6px; }
-      .row img{ width:36px; height:36px; flex:0 0 auto; }
-      .row .title{ font-weight:800; font-size:1.1rem; margin:0; color:#000000; }
-      .desc{ margin:0; color:rgba(255,255,255,.85); }
+      .ui-card:hover{
+        background: #f9fafb; /* hover 시 살짝 밝은 회색 */
+        transform: translateY(-1px);
+      }
+
+      a.card-link{
+        display:block;
+        text-decoration:none !important;
+        color:inherit !important;
+        -webkit-tap-highlight-color: transparent;
+        outline:none !important;
+      }
+      a.card-link:hover, a.card-link:active, a.card-link *{
+        text-decoration:none !important;
+      }
+
+      .row{
+        display:flex;
+        align-items:center;
+        gap:10px;
+        margin-bottom:6px;
+      }
+      .row img{
+        width:36px;
+        height:36px;
+        flex:0 0 auto;
+      }
+      .row .title{
+        font-weight:800;
+        font-size:1.1rem;
+        margin:0;
+        color:#111827; /* 검정색 텍스트 (Gray-900) */
+      }
+
+      .desc{
+        margin:0;
+        color:#374151; /* 진한 회색 (Gray-700) */
+      }
     </style>
     """,
     unsafe_allow_html=True,
 )
+
 
 cols = st.columns(3)
 for col, c in zip(cols, cards):
