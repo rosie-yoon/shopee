@@ -5,18 +5,22 @@ from pathlib import Path
 from urllib.parse import quote
 import streamlit as st
 
-from ui_theme import apply_theme  # 공통 테마
 from user_manager import is_logged_in, login, logout
 
 # --------------------------------------------------------------------
-# 기본 설정 + 홈에서는 사이드바 완전 숨김
+# 기본 설정
 # --------------------------------------------------------------------
 st.set_page_config(
     page_title="Shopee Support Tools",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded" if is_logged_in() else "collapsed"
 )
-apply_theme(hide_sidebar=True)
+
+# 사이드바 표시 상태 제어 (로그인 전 숨김 / 로그인 후 표시)
+if not is_logged_in():
+    st.markdown("<style>section[data-testid='stSidebar']{display:none !important;}</style>", unsafe_allow_html=True)
+else:
+    st.markdown("<style>section[data-testid='stSidebar']{display:block !important;}</style>", unsafe_allow_html=True)
 
 # --------------------------------------------------------------------
 # 아이콘 유틸
@@ -56,8 +60,7 @@ if not is_logged_in():
             st.rerun()
         else:
             st.error("등록되지 않은 사용자입니다. 관리자에게 문의하세요.")
-    # 로그인 전에는 아래 콘텐츠 숨김
-    st.caption("버전: v3")
+    st.caption("버전: v3.2")
     st.stop()
 
 # --------------------------------------------------------------------
@@ -97,7 +100,6 @@ cards = [
     },
 ]
 
-# 페이지 전용 스타일 (카드)
 st.markdown(
     """
     <style>
@@ -143,4 +145,4 @@ for col, c in zip(cols, cards):
         )
 
 st.divider()
-st.caption("버전: v3")
+st.caption("버전: v3.2")
