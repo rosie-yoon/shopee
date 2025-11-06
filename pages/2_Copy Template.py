@@ -11,9 +11,23 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# ✅ 로그인/프로필 사이드바
+# ✅ Streamlit Cloud 대비: 루트 상위(/mount/src)도 추가
+PARENT = ROOT.parent
+if str(PARENT) not in sys.path:
+    sys.path.insert(0, str(PARENT))
+
+# ✅ 프로필 사이드바 임포트 (안전 폴백 포함)
+try:
+    from profile_sidebar import render_profile_sidebar
+except ModuleNotFoundError:
+    try:
+        from shopee.profile_sidebar import render_profile_sidebar
+    except Exception as e:
+        st.error(f"profile_sidebar 임포트 실패: {e}")
+        st.stop()
+
+# ✅ 로그인 유틸
 from user_manager import is_logged_in, get_user_pref
-from profile_sidebar import render_profile_sidebar
 
 # 내부 모듈
 from item_uploader.app import run as item_uploader_run

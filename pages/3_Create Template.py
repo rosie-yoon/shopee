@@ -1,6 +1,5 @@
 # pages/3_Create Template.py
 # -*- coding: utf-8 -*-
-
 import streamlit as st
 from pathlib import Path
 import sys
@@ -14,15 +13,31 @@ import traceback
 # ──────────────────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Create Template", layout="wide")
 
+# ✅ 경로 설정 (Cloud 호환)
 ROOT = Path(__file__).resolve().parents[1]  # .../shopee
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# ✅ 로그인/프로필 사이드바
-from user_manager import is_logged_in, get_user_pref
-from profile_sidebar import render_profile_sidebar
+PARENT = ROOT.parent  # /mount/src
+if str(PARENT) not in sys.path:
+    sys.path.insert(0, str(PARENT))
 
+# ✅ 프로필 사이드바 임포트 (Cloud 폴백 포함)
+try:
+    from profile_sidebar import render_profile_sidebar
+except ModuleNotFoundError:
+    try:
+        from shopee.profile_sidebar import render_profile_sidebar
+    except Exception as e:
+        st.error(f"profile_sidebar 임포트 실패: {e}")
+        st.stop()
+
+# ✅ 로그인 유틸
+from user_manager import is_logged_in, get_user_pref
+
+# ──────────────────────────────────────────────────────────────────────────────
 # 프로젝트 모듈
+# ──────────────────────────────────────────────────────────────────────────────
 from shopee_creator.controller import ShopeeCreator
 from shopee_creator.utils_creator import extract_sheet_id, get_env
 import shopee_creator.creation_steps as steps
@@ -35,7 +50,7 @@ if not is_logged_in():
     st.warning("로그인이 필요합니다. 먼저 사용자명을 입력해 로그인해 주세요.")
     st.stop()
 
-# 공통 프로필 사이드바 (Create 전용 키로 저장/로드)
+# ✅ 공통 프로필 사이드바 (Create 전용 키로 저장/로드)
 #  - users.json 예시: create_sheet_id / create_image_host
 render_profile_sidebar(
     sheet_key="create_sheet_id",
@@ -44,8 +59,7 @@ render_profile_sidebar(
     host_label="Image Hosting URL",
 )
 
-# 로그인 사용자 프로필을 이 페이지에서 사용하는 세션 키로 매핑
-#  - 폴백: 기존 sheet_id/image_host 또는 default_image_host 사용
+# ✅ 로그인 사용자 프로필 → 세션 매핑
 st.session_state.setdefault(
     "SOURCE_SPREADSHEET_ID",
     get_user_pref("create_sheet_id") or get_user_pref("sheet_id")
@@ -78,13 +92,12 @@ run_enabled = bool(sid and shop_code_input.strip())
 run_clicked = st.button("🚀 실행", type="primary", use_container_width=True, disabled=not run_enabled)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 실행: 프로그레스바 방식(표/로그 X), 단계별 직접 호출(C1→C2→C7→C3→C4→C5→C6)
+# 실행: 단계별 호출 (C1→C2→C7→C3→C4→C5→C6)
 # ──────────────────────────────────────────────────────────────────────────────
 if run_clicked:
     shop_code = shop_code_input.strip()
-    st.session_state["SHOP_CODE"] = shop_code  # 최신 반영
+    st.session_state["SHOP_CODE"] = shop_code
 
-    # 컨트롤러 / gspread 클라이언트 준비 (한 번만)
     ctrl = ShopeeCreator(st.secrets)
     if base_url or shop_code:
         try:
@@ -92,15 +105,15 @@ if run_clicked:
         except Exception:
             pass
 
-    # 입력 시트/레퍼런스 시트 Open (open_by_key로 1회씩만)
+    # 입력 시트 오픈
     try:
         gs = ctrl.gs
-        sh  = gs.open_by_key(sid)
+        sh = gs.open_by_key(sid)
     except Exception as e:
         st.error(f"입력 시트 열기 실패: {e}")
         st.stop()
 
-    # Ref URL/ID 읽기 (secrets: REFERENCE_SPREADSHEET_ID or URL)
+    # 레퍼런스 시트 열기
     ref_id_or_url = st.secrets.get("REFERENCE_SPREADSHEET_ID") or st.secrets.get("REFERENCE_SPREADSHEET_URL") or ""
     try:
         rid = extract_sheet_id(str(ref_id_or_url))
@@ -112,7 +125,6 @@ if run_clicked:
     # 프로그레스바
     progress = st.progress(0.0, text="시작합니다…")
 
-    # 단계 정의
     run_list = [
         ("C1 Initialize",             lambda: steps.run_step_C1(sh, ref)),
         ("C2 Collection → TEM",       lambda: steps.run_step_C2(sh, ref)),
@@ -132,7 +144,7 @@ if run_clicked:
             buf = io.StringIO()
             with redirect_stdout(buf):
                 fn()
-            time.sleep(0.2)  # API 피크 완화
+            time.sleep(0.2)
             progress.progress(i/total, text=f"{name} 완료")
         except Exception:
             progress.progress((i-1)/total, text=f"{name} 실패")
@@ -146,9 +158,9 @@ if run_clicked:
         progress.progress(1.0, text="모든 단계 완료")
         st.success("모든 단계가 정상 완료되었습니다! 🎉")
 
-        # 실행 직후 내보내기 파일 생성 → 세션 저장
+        # 실행 직후 내보내기
         try:
-            xio = export_tem_xlsx(sh)  # BytesIO or None
+            xio = export_tem_xlsx(sh)
             if xio:
                 st.session_state["DL_XLSX"] = xio.getvalue()
             else:
@@ -159,7 +171,7 @@ if run_clicked:
             st.warning(f"다운로드 생성 중 오류: {ex}")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 2. 최종 파일 다운로드 (항상 표시: 준비되면 자동 활성화)
+# 2. 최종 파일 다운로드
 # ──────────────────────────────────────────────────────────────────────────────
 st.markdown("---")
 st.subheader("2. 최종 파일 다운로드")

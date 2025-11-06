@@ -117,7 +117,7 @@ st.markdown(
       a.card-link:hover, a.card-link:active, a.card-link *{ text-decoration:none !important; }
       .row{ display:flex; align-items:center; gap:10px; margin-bottom:6px; }
       .row img{ width:36px; height:36px; flex:0 0 auto; }
-      .row .title{ font-weight:800; font-size:1.1rem; margin:0; color:#fff; }
+      .row .title{ font-weight:800; font-size:1.1rem; margin:0; color:#000000; }
       .desc{ margin:0; color:rgba(255,255,255,.85); }
     </style>
     """,
