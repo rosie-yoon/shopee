@@ -53,6 +53,14 @@ render_profile_sidebar = import_module_safe()
 try:
     from user_manager import is_logged_in, get_user_pref, ensure_login_persistence
 except ModuleNotFoundError:
+    mod = __import__(
+        f"{Path(__file__).resolve().parents[1].name}.user_manager",
+        fromlist=["is_logged_in", "get_user_pref", "ensure_login_persistence"]
+    )
+    is_logged_in = getattr(mod, "is_logged_in")
+    get_user_pref = getattr(mod, "get_user_pref")
+    ensure_login_persistence = getattr(mod, "ensure_login_persistence")
+except ModuleNotFoundError:
     mod = __import__(f"{PACKAGE_NAME}.user_manager", fromlist=["is_logged_in", "get_user_pref", "ensure_login_persistence"])
     is_logged_in = getattr(mod, "is_logged_in")
     get_user_pref = getattr(mod, "get_user_pref")

@@ -45,8 +45,17 @@ render_profile_sidebar = import_module_safe()
 
 # ✅ 로그인 유틸 (동일한 방식으로 처리)
 t# (상단 import 블록 중 일부)  ← 기존 is_logged_in/get_user_pref 동적 임포트 하던 자리 교체
+# ✅ 로그인 유틸 (Cloud/Local 호환 동적 임포트)
 try:
     from user_manager import is_logged_in, get_user_pref, ensure_login_persistence
+except ModuleNotFoundError:
+    mod = __import__(
+        f"{Path(__file__).resolve().parents[1].name}.user_manager",
+        fromlist=["is_logged_in", "get_user_pref", "ensure_login_persistence"]
+    )
+    is_logged_in = getattr(mod, "is_logged_in")
+    get_user_pref = getattr(mod, "get_user_pref")
+    ensure_login_persistence = getattr(mod, "ensure_login_persistence")
 except ModuleNotFoundError:
     mod = __import__(f"{PACKAGE_NAME}.user_manager", fromlist=["is_logged_in", "get_user_pref", "ensure_login_persistence"])
     is_logged_in = getattr(mod, "is_logged_in")

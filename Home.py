@@ -33,6 +33,20 @@ if not is_logged_in():
 else:
     st.markdown("<style>section[data-testid='stSidebar']{display:block !important;}</style>", unsafe_allow_html=True)
 
+# ✅ URL의 ?nav= 경로가 있으면 해당 페이지로 전환
+def _switch_by_query():
+    try:
+        nav = st.query_params.get("nav", None)
+        if isinstance(nav, list):
+            nav = nav[0] if nav else None
+    except Exception:
+        nav = st.experimental_get_query_params().get("nav", [None])[0]
+    if nav:
+        st.switch_page(nav)
+
+_switch_by_query()
+
+
 # --------------------------------------------------------------------
 # 아이콘 유틸
 # --------------------------------------------------------------------
