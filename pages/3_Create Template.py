@@ -18,6 +18,10 @@ ROOT = Path(__file__).resolve().parents[1]  # .../shopee
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# ✅ 로그인/프로필 사이드바
+from user_manager import is_logged_in, get_user_pref
+from profile_sidebar import render_profile_sidebar
+
 # 프로젝트 모듈
 from shopee_creator.controller import ShopeeCreator
 from shopee_creator.utils_creator import extract_sheet_id, get_env
@@ -25,51 +29,19 @@ import shopee_creator.creation_steps as steps
 from shopee_creator.creation_steps import export_tem_xlsx  # XLSX만 사용
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Sidebar: 설정 폼 (URL/이미지 호스팅만)
+# 접근 제한 & 프로필 사이드바 / 사용자 프로필 → 세션 기본값
 # ──────────────────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.subheader("⚙️ 초기 설정")
+if not is_logged_in():
+    st.warning("로그인이 필요합니다. 먼저 로그인 페이지에서 사용자명을 입력해 주세요.")
+    st.stop()
 
-    cur_source_sid = st.session_state.get("SOURCE_SPREADSHEET_ID", get_env("SOURCE_SPREADSHEET_ID", ""))
-    cur_img_host  = st.session_state.get("IMAGE_BASE_URL",      get_env("IMAGE_BASE_URL", ""))
+# 공통 프로필 사이드바 (사용자가 시트/호스팅 URL을 변경·저장 가능)
+render_profile_sidebar()
 
-    with st.form("settings_form_create_template"):
-        source_url = st.text_input(
-            "상품등록 시트 URL",
-            value=(f"https://docs.google.com/spreadsheets/d/{cur_source_sid}" if cur_source_sid else ""),
-            placeholder="https://docs.google.com/spreadsheets/d/...",
-        )
-        image_host = st.text_input(
-            "Image Hosting URL",
-            value=cur_img_host or "",
-            placeholder="예: https://example.com/",
-        )
-        submitted = st.form_submit_button("저장")
-        if submitted:
-            sid = extract_sheet_id(source_url)
-            if not sid:
-                st.error("올바른 Google Sheets URL을 입력해주세요.")
-            elif image_host and not image_host.startswith(("http://", "https://")):
-                st.error("이미지 호스팅 주소를 확인해주세요. (http/https)")
-            else:
-                st.session_state["SOURCE_SPREADSHEET_ID"] = sid
-                st.session_state["IMAGE_BASE_URL"]       = image_host
-                # Shop Code는 본문에서 입력하므로 초기화
-                st.session_state.pop("SHOP_CODE", None)
-                st.success("설정이 저장되었습니다!")
-                st.rerun()
-
-    # ⬇️ 폼 바깥: 네모박스 아래 한 줄 여백 + 안내 문구
-    st.write("")  # 한 줄 여백
-
-    st.markdown(
-        """
-* [상품등록 시트 템플릿](https://docs.google.com/spreadsheets/d/1MP4kpazAQkvGI7Ew31jthKnwjs8WZP0kWhyLPUpTgJA/edit?gid=0#gid=0)의 사본을 생성하여 위 구글 시트 URL 란에 입력해주세요.  
-* 사본 생성 시, 시트의 안내사항을 꼭 확인해주세요.
-        """
-    )
-
-
+# 🔁 로그인한 사용자의 프로필을 이 페이지에서 사용하는 세션 키로 매핑
+#    - 기존 Copy/Upload 쪽 키와 달라서 여기서 이름을 맞춰줍니다.
+st.session_state.setdefault("SOURCE_SPREADSHEET_ID", get_user_pref("sheet_id"))
+st.session_state.setdefault("IMAGE_BASE_URL",       get_user_pref("image_host"))
 
 # 다운로드 바이트 세션 기본값 (XLSX만)
 st.session_state.setdefault("DL_XLSX", None)
@@ -145,19 +117,14 @@ if run_clicked:
     for i, (name, fn) in enumerate(run_list, start=1):
         try:
             progress.progress((i-1)/total, text=f"{name} 실행 중…")
-            # 내부 print 로그는 캡처만 하고 화면엔 출력하지 않음
             buf = io.StringIO()
             with redirect_stdout(buf):
                 fn()
-            # 약간의 슬립으로 API 피크 완화(429 방지 도움)
-            time.sleep(0.2)
+            time.sleep(0.2)  # API 피크 완화
             progress.progress(i/total, text=f"{name} 완료")
         except Exception:
             progress.progress((i-1)/total, text=f"{name} 실패")
-            # 개발용 디버깅을 위해서는 아래 주석 해제 가능
-            # st.code(buf.getvalue())
             st.error(f"실행 실패: {name} 단계에서 오류가 발생했습니다.")
-            # 상세 오류는 Expander로만 노출(원하면 제거 가능)
             with st.expander("자세한 오류", expanded=False):
                 st.code(traceback.format_exc())
             ok = False
@@ -167,7 +134,7 @@ if run_clicked:
         progress.progress(1.0, text="모든 단계 완료")
         st.success("모든 단계가 정상 완료되었습니다! 🎉")
 
-        # 실행 직후 바로 내보내기 파일 생성 → 세션 저장 (버튼 즉시 활성화)
+        # 실행 직후 내보내기 파일 생성 → 세션 저장
         try:
             xio = export_tem_xlsx(sh)  # BytesIO or None
             if xio:

@@ -6,6 +6,8 @@ from urllib.parse import quote
 import streamlit as st
 
 from ui_theme import apply_theme  # 공통 테마
+# ✅ 추가: 로그인/로그아웃 유틸
+from user_manager import is_logged_in, logout
 
 # --------------------------------------------------------------------
 # 기본 설정 + 홈에서는 사이드바 완전 숨김
@@ -16,6 +18,13 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 apply_theme(hide_sidebar=True)
+
+# ✅ 로그인 가드: 네비게이션 처리 전에 차단
+if not is_logged_in():
+    st.warning("로그인이 필요합니다. 아래 버튼을 눌러 로그인 페이지로 이동하세요.")
+    if st.button("로그인 페이지로 이동", type="primary"):
+        st.switch_page("pages/0_Login.py")
+    st.stop()
 
 # --------------------------------------------------------------------
 # 쿼리 파라미터로 페이지 전환 (카드 전체 클릭용)
@@ -57,13 +66,10 @@ ICONS = {
 
 # --------------------------------------------------------------------
 # 페이지 전용 스타일 (카드만)
-#  - 밑줄 제거/hover 밑줄 제거
-#  - 같은 탭 전환(target=_self)과 함께 사용
 # --------------------------------------------------------------------
 st.markdown(
     """
     <style>
-      /* 카드: 단일 레이어 */
       .ui-card{
         background: rgba(255,255,255,.08);
         backdrop-filter: blur(10px);
@@ -74,26 +80,11 @@ st.markdown(
         min-height: 130px;
       }
       .ui-card:hover{ background: rgba(255,255,255,.12); transform: translateY(-1px); }
-
-      /* 카드 링크(전체 클릭) - 밑줄/하이라이트 제거 */
-      a.card-link {
-        display:block;
-        text-decoration:none !important;
-        color:inherit !important;
-        -webkit-tap-highlight-color: transparent;
-        outline:none !important;
-      }
-      a.card-link:hover,
-      a.card-link:active,
-      a.card-link *{
-        text-decoration:none !important;
-      }
-
-      /* 헤더(아이콘+타이틀) 가로 정렬 */
+      a.card-link{ display:block; text-decoration:none !important; color:inherit !important; -webkit-tap-highlight-color: transparent; outline:none !important; }
+      a.card-link:hover, a.card-link:active, a.card-link *{ text-decoration:none !important; }
       .row{ display:flex; align-items:center; gap:10px; margin-bottom:6px; }
       .row img{ width:36px; height:36px; flex:0 0 auto; }
       .row .title{ font-weight:800; font-size:1.1rem; margin:0; color:#fff; }
-
       .desc{ margin:0; color:rgba(255,255,255,.85); }
     </style>
     """,
@@ -103,7 +94,15 @@ st.markdown(
 # --------------------------------------------------------------------
 # 본문
 # --------------------------------------------------------------------
-st.title("Shopee Support Tools")
+# 상단 타이틀 + 우측 로그아웃 버튼
+left, mid, right = st.columns([6, 4, 2])
+with left:
+    st.title("Shopee Support Tools")
+with right:
+    if st.button("로그아웃"):
+        logout()
+        st.switch_page("pages/0_Login.py")
+
 st.divider()
 
 cards = [
@@ -131,7 +130,6 @@ cols = st.columns(3)
 for col, c in zip(cols, cards):
     with col:
         b64 = icon_b64(c["icon"]) if Path(c["icon"]).exists() else ""
-        # 앵커의 href를 ?nav=... 로 만들어 카드 전체를 클릭 가능하게
         href = f"?nav={quote(c['path'])}"
         st.markdown(
             f"""
