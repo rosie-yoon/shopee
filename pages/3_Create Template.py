@@ -22,18 +22,42 @@ PARENT = ROOT.parent  # /mount/src
 if str(PARENT) not in sys.path:
     sys.path.insert(0, str(PARENT))
 
-# ✅ 프로필 사이드바 임포트 (Cloud 폴백 포함)
-try:
-    from profile_sidebar import render_profile_sidebar
-except ModuleNotFoundError:
-    try:
-        from shopee.profile_sidebar import render_profile_sidebar
-    except Exception as e:
-        st.error(f"profile_sidebar 임포트 실패: {e}")
-        st.stop()
+# ✅ Streamlit Cloud & Local 호환 경로 처리
+ROOT = Path(__file__).resolve().parents[1]   # .../shopee
+PACKAGE_NAME = ROOT.name                     # "shopee"
+PARENT = ROOT.parent                         # /mount/src
 
-# ✅ 로그인 유틸
-from user_manager import is_logged_in, get_user_pref
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+if str(PARENT) not in sys.path:
+    sys.path.insert(0, str(PARENT))
+
+# ✅ 안전한 임포트 함수
+def import_module_safe():
+    try:
+        from profile_sidebar import render_profile_sidebar
+        return render_profile_sidebar
+    except ModuleNotFoundError:
+        try:
+            # Cloud 패키지 모드
+            mod = __import__(f"{PACKAGE_NAME}.profile_sidebar", fromlist=["render_profile_sidebar"])
+            return getattr(mod, "render_profile_sidebar")
+        except Exception as e:
+            st.error(f"profile_sidebar 임포트 실패: {e}")
+            st.stop()
+
+# ✅ 실제 임포트 실행
+render_profile_sidebar = import_module_safe()
+
+# (상단 user_manager 동적 임포트 부분)
+try:
+    from user_manager import is_logged_in, get_user_pref, ensure_login_persistence
+except ModuleNotFoundError:
+    mod = __import__(f"{PACKAGE_NAME}.user_manager", fromlist=["is_logged_in", "get_user_pref", "ensure_login_persistence"])
+    is_logged_in = getattr(mod, "is_logged_in")
+    get_user_pref = getattr(mod, "get_user_pref")
+    ensure_login_persistence = getattr(mod, "ensure_login_persistence")
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 프로젝트 모듈
@@ -46,6 +70,8 @@ from shopee_creator.creation_steps import export_tem_xlsx  # XLSX만 사용
 # ──────────────────────────────────────────────────────────────────────────────
 # 접근 제한 & 프로필 사이드바 / 사용자 프로필 → 세션 기본값
 # ──────────────────────────────────────────────────────────────────────────────
+# 접근 제한 직전
+ensure_login_persistence()   # ✅ 여기!
 if not is_logged_in():
     st.warning("로그인이 필요합니다. 먼저 사용자명을 입력해 로그인해 주세요.")
     st.stop()

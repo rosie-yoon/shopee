@@ -68,6 +68,7 @@ if not is_logged_in():
     if st.button("로그인", type="primary", use_container_width=False) and username.strip():
         if login(username.strip()):
             st.success("로그인 성공!")
+            st.query_params["user"] = username.strip()  # ✅ 로그인 사용자 이름 URL에 저장
             st.rerun()
         else:
             st.error("등록되지 않은 사용자입니다. 관리자에게 문의하세요.")

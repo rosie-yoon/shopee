@@ -50,3 +50,21 @@ def update_user_profile(patch: dict) -> None:
     data[username] = cur
     save_users(data)
     st.session_state["current_user"] = cur  # 세션 동기화
+import streamlit as st
+
+# ✅ 페이지 이동 후에도 로그인 상태 유지 (Session hash 기반)
+def ensure_login_persistence():
+    """
+    세션이 새로 열려도 브라우저 쿠키처럼 로그인 유지.
+    홈에서 로그인 성공 시 username을 query_param으로 저장하고,
+    다른 페이지는 그걸 다시 세션에 복원.
+    """
+    if "username" not in st.session_state:
+        # URL에 username이 있으면 복원
+        q = st.query_params or {}
+        username = q.get("user", [None])[0] if isinstance(q.get("user"), list) else q.get("user")
+        if username:
+            users = load_users()
+            if username in users:
+                st.session_state["username"] = username
+                st.session_state["current_user"] = users[username]
