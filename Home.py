@@ -14,15 +14,13 @@ for p in (ROOT, PARENT):
         sys.path.insert(0, str(p))
 # ------------------------------------------------------------------------------
 
-# ✅ user_manager 임포트 (중복 금지)
+# user_manager 임포트 (중복 금지)
 from user_manager import (
     is_logged_in, login, logout,
     get_current_user, pin_user_query
 )
 
-# --------------------------------------------------------------------
 # 기본 설정
-# --------------------------------------------------------------------
 st.set_page_config(
     page_title="Shopee Support Tools",
     layout="wide",
@@ -35,7 +33,7 @@ if not is_logged_in():
 else:
     st.markdown("<style>section[data-testid='stSidebar']{display:block !important;}</style>", unsafe_allow_html=True)
 
-# ✅ URL의 ?nav= 경로가 있으면 해당 페이지로 전환
+# URL의 ?nav= 경로가 있으면 해당 페이지로 전환
 def _switch_by_query():
     try:
         nav = st.query_params.get("nav", None)
@@ -48,9 +46,7 @@ def _switch_by_query():
 
 _switch_by_query()
 
-# --------------------------------------------------------------------
 # 아이콘 유틸
-# --------------------------------------------------------------------
 ICON_DIR = Path("assets/icons")
 
 def resolve_icon(name: str) -> Path:
@@ -71,9 +67,7 @@ ICONS = {
     "create": resolve_icon("create"),
 }
 
-# --------------------------------------------------------------------
 # 로그인 섹션 (미로그인 시)
-# --------------------------------------------------------------------
 st.title("Shopee Support Tools")
 st.divider()
 
@@ -90,10 +84,10 @@ if not is_logged_in():
     st.caption("버전: v3.2")
     st.stop()
 
-# ✅ 여기! 로그인 통과 직후 user 쿼리 다시 고정
+# 로그인 통과 직후 user 쿼리 다시 고정
 pin_user_query()
 
-# 현재 사용자 정보 준비 (표시명 우선, 없으면 username)
+# 현재 사용자 정보
 user = get_current_user()
 display_name = (user.get("display_name") if isinstance(user, dict) else None) \
                or st.session_state.get("username", "")
@@ -140,7 +134,6 @@ cols = st.columns(3)
 for col, c in zip(cols, cards):
     with col:
         b64 = icon_b64(c["icon"])
-        # ✅ user 쿼리를 보존해서 넘김
         href = f"?nav={quote(c['path'])}"
         if user_q:
             href = f"{href}&user={quote(user_q)}"
