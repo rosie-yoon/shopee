@@ -68,3 +68,25 @@ def ensure_login_persistence():
             if username in users:
                 st.session_state["username"] = username
                 st.session_state["current_user"] = users[username]
+
+def pin_user_query():
+    """
+    현재 로그인한 username을 URL ?user= 에 항상 유지시켜
+    페이지 이동/새로고침/앱 재시작 시에도 세션을 복원할 수 있게 한다.
+    """
+    u = st.session_state.get("username")
+    if not u:
+        return
+    try:
+        # 최신 Streamlit: dict-like
+        q = st.query_params
+        changed = (q.get("user") != u)
+        if changed:
+            q["user"] = u
+            st.query_params = q
+    except Exception:
+        # 구버전 호환
+        q = st.experimental_get_query_params()
+        if q.get("user", [None])[0] != u:
+            q["user"] = u
+            st.experimental_set_query_params(**q)

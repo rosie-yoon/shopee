@@ -18,17 +18,19 @@ for p in (ROOT, PARENT):
 # ─────────────────────────────────────────────────────────────────────────────
 # 핵심 임포트 (심플 버전)  ← 여기만 정확히 정리하면 됨
 # ─────────────────────────────────────────────────────────────────────────────
-from user_manager import is_logged_in, get_user_pref, ensure_login_persistence
+from user_manager import is_logged_in, get_user_pref, ensure_login_persistence, pin_user_query
 from profile_sidebar import render_profile_sidebar
 from item_uploader.app import run as item_uploader_run
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 접근 제한: 로그인 복원 → 가드
 # ─────────────────────────────────────────────────────────────────────────────
-ensure_login_persistence()   # URL의 ?user= 로 세션 복원
+ensure_login_persistence()
 if not is_logged_in():
     st.warning("로그인이 필요합니다. 먼저 로그인해 주세요.")
     st.stop()
+
+pin_user_query()  # ✅ 여기서 고정
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 프로필 사이드바 (Copy 전용 키)

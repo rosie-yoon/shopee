@@ -11,11 +11,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
-from user_manager import is_logged_in, ensure_login_persistence
+from user_manager import is_logged_in, ensure_login_persistence, pin_user_query
 # ...
-ensure_login_persistence()            # ✅ 세션 복원 (가드 전에)
+ensure_login_persistence()
 if not is_logged_in():
     st.warning("로그인이 필요합니다. 사용자명을 입력해 로그인해 주세요.")
     st.stop()
+
+pin_user_query()  # ✅ 여기서 고정
 
 image_compose_run()

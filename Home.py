@@ -4,19 +4,21 @@ import base64
 from pathlib import Path
 from urllib.parse import quote
 import streamlit as st
-
-# --- import path fix (Streamlit Cloud 호환) ---
 import sys
-from pathlib import Path
-ROOT = Path(__file__).resolve().parent  # /mount/src/shopee
-PARENT = ROOT.parent                    # /mount/src
+
+# --- import path fix (Streamlit Cloud 호환) : 반드시 user_manager 임포트보다 먼저 ---
+ROOT = Path(__file__).resolve().parent   # /mount/src/shopee
+PARENT = ROOT.parent                     # /mount/src
 for p in (ROOT, PARENT):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
-# ----------------------------------------------
+# ------------------------------------------------------------------------------
 
-
-from user_manager import is_logged_in, login, logout
+# ✅ user_manager 임포트 (중복 금지)
+from user_manager import (
+    is_logged_in, login, logout,
+    get_current_user, pin_user_query
+)
 
 # --------------------------------------------------------------------
 # 기본 설정
@@ -24,7 +26,7 @@ from user_manager import is_logged_in, login, logout
 st.set_page_config(
     page_title="Shopee Support Tools",
     layout="wide",
-    initial_sidebar_state="expanded" if is_logged_in() else "collapsed"
+    initial_sidebar_state="expanded" if is_logged_in() else "collapsed",
 )
 
 # 사이드바 표시 상태 제어 (로그인 전 숨김 / 로그인 후 표시)
@@ -45,7 +47,6 @@ def _switch_by_query():
         st.switch_page(nav)
 
 _switch_by_query()
-
 
 # --------------------------------------------------------------------
 # 아이콘 유틸
@@ -82,19 +83,25 @@ if not is_logged_in():
     if st.button("로그인", type="primary", use_container_width=False) and username.strip():
         if login(username.strip()):
             st.success("로그인 성공!")
-            st.query_params["user"] = username.strip()  # ✅ 로그인 사용자 이름 URL에 저장
+            st.query_params["user"] = username.strip()  # URL에 user 고정
             st.rerun()
         else:
             st.error("등록되지 않은 사용자입니다. 관리자에게 문의하세요.")
     st.caption("버전: v3.2")
     st.stop()
 
-# ... (위 내용 동일)
+# ✅ 여기! 로그인 통과 직후 user 쿼리 다시 고정
+pin_user_query()
 
-# 로그인 상태에서만 도달
+# 현재 사용자 정보 준비 (표시명 우선, 없으면 username)
+user = get_current_user()
+display_name = (user.get("display_name") if isinstance(user, dict) else None) \
+               or st.session_state.get("username", "")
+
+# 상단 헤더
 left, mid, right = st.columns([6, 4, 2])
 with left:
-    st.subheader("환영합니다 👋")
+    st.subheader(f"환영합니다, {display_name} 😊")
 with right:
     if st.button("로그아웃"):
         logout()
@@ -111,9 +118,9 @@ user_q = q.get("user")
 user_q = (user_q[0] if isinstance(user_q, list) else user_q) if user_q else None
 
 cards = [
-    {"icon": ICONS["cover"],  "title": "Cover Image",  "desc": "썸네일로 사용할 커버 이미지 생성",     "path": "pages/1_Cover Image.py"},
-    {"icon": ICONS["copy"],   "title": "Copy Template","desc": "복제용 Mass Upload 템플릿 생성",     "path": "pages/2_Copy Template.py"},
-    {"icon": ICONS["create"], "title": "Create Template","desc":"신규 상품 Mass Upload 템플릿 생성", "path": "pages/3_Create Template.py"},
+    {"icon": ICONS["cover"],  "title": "Cover Image",   "desc": "썸네일로 사용할 커버 이미지 생성", "path": "pages/1_Cover Image.py"},
+    {"icon": ICONS["copy"],   "title": "Copy Template", "desc": "복제용 Mass Upload 템플릿 생성", "path": "pages/2_Copy Template.py"},
+    {"icon": ICONS["create"], "title": "Create Template","desc":"신규 상품 Mass Upload 템플릿 생성","path": "pages/3_Create Template.py"},
 ]
 
 st.markdown("""
@@ -134,10 +141,9 @@ for col, c in zip(cols, cards):
     with col:
         b64 = icon_b64(c["icon"])
         # ✅ user 쿼리를 보존해서 넘김
+        href = f"?nav={quote(c['path'])}"
         if user_q:
-            href = f"?user={quote(user_q)}&nav={quote(c['path'])}"
-        else:
-            href = f"?nav={quote(c['path'])}"
+            href = f"{href}&user={quote(user_q)}"
         st.markdown(
             f"""
             <a class="card-link" href="{href}" target="_self" rel="noopener">
