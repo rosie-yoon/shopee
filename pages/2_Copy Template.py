@@ -55,7 +55,21 @@ with st.sidebar:
         """
     )
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 메인 실행
-# ─────────────────────────────────────────────────────────────────────────────
+# ==============================
+# 메인 실행 (env 동기화 → 실행)
+# ==============================
+import os
+
+def _sync_env_from_session():
+    sid = st.session_state.get("GOOGLE_SHEETS_SPREADSHEET_ID", "")
+    host = st.session_state.get("IMAGE_HOSTING_URL", "")
+    if sid:
+        os.environ["GOOGLE_SHEETS_SPREADSHEET_ID"] = sid
+        # 별칭 키를 쓰는 코드 대비
+        os.environ["GOOGLE_SHEET_KEY"] = sid
+    if host:
+        os.environ["IMAGE_HOSTING_URL"] = host
+
+_sync_env_from_session()
 item_uploader_run()
+
