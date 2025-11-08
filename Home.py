@@ -1,54 +1,24 @@
-# Home.py (v3-safe, no user_manager dependency)
+# Home.py (v4 - light + native cards)
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 from pathlib import Path
 from urllib.parse import quote
-import base64
 
 import streamlit as st
-from ui_theme import apply_theme
+# from ui_theme import apply_theme  # ❌ 다크 테마 제거
 
-# ─────────────────────────────────────────────────────────────
-# Page config & theme
-# ─────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Shopee Support Tools",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
-apply_theme()
+# apply_theme()  # ❌ 호출 제거 (다크 스타일 비활성)
 
 # ─────────────────────────────────────────────────────────────
-# Constants
+# Auth/session helpers (user_manager 없이 동작)
 # ─────────────────────────────────────────────────────────────
 SESSION_USER_KEY = "user"
 SESSION_AUTH_KEY = "is_logged_in"
-ICON_DIR = Path("assets/icons")
-
-NAV_MAP = {
-    # key: (표시제목, 설명, 아이콘명, switch_page 대상)
-    "cover": ("Cover Image", "상품 커버 썸네일 합성기", "design", "pages/1_Cover Image.py"),
-    "template": ("Copy Template", "3종 템플릿 복사/업로드", "copy", "pages/2_Copy Template.py"),
-    "automation": ("Create Template", "템플릿 생성/전처리/내보내기", "create", "pages/3_Create Template.py"),
-}
-
-# ─────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────
-def _find_icon_path(name: str) -> Path | None:
-    for p in (ICON_DIR / f"{name}@3x.png", ICON_DIR / f"{name}.png"):
-        if p.exists():
-            return p
-    return None
-
-def resolve_icon_b64(name: str) -> str | None:
-    p = _find_icon_path(name)
-    if not p:
-        return None
-    try:
-        return base64.b64encode(p.read_bytes()).decode("utf-8")
-    except Exception:
-        return None
 
 def is_logged_in() -> bool:
     return bool(st.session_state.get(SESSION_AUTH_KEY)) and bool(st.session_state.get(SESSION_USER_KEY))
@@ -57,9 +27,6 @@ def current_user() -> str:
     return st.session_state.get(SESSION_USER_KEY, "") or ""
 
 def pin_user_query(username: str) -> bool:
-    """
-    ?user= 값을 세션 사용자로 고정. 변경이 실제 발생하면 True 반환(= rerun 필요).
-    """
     if not username:
         return False
     qp = dict(st.query_params)
@@ -85,28 +52,13 @@ def do_logout(clear_nav: bool = True) -> None:
     st.query_params = qp
     st.rerun()
 
-def handle_nav():
-    """
-    ?nav= 이 있고 로그인된 경우 해당 페이지로 switch_page
-    """
-    nav = st.query_params.get("nav")
-    if not nav or nav not in NAV_MAP:
-        return
-    if not is_logged_in():
-        return
-    pin_user_query(current_user())  # 안전핀
-    target = NAV_MAP[nav][3]
-    st.switch_page(target)
-
 # ─────────────────────────────────────────────────────────────
-# Auth bootstrap (딥링크 복구 → nav 처리)
+# 딥링크 복구
 # ─────────────────────────────────────────────────────────────
 qp_user = st.query_params.get("user")
 if qp_user and not is_logged_in():
     st.session_state[SESSION_USER_KEY] = qp_user
     st.session_state[SESSION_AUTH_KEY] = True
-
-handle_nav()
 
 # ─────────────────────────────────────────────────────────────
 # Header
@@ -142,54 +94,26 @@ else:
 st.divider()
 
 # ─────────────────────────────────────────────────────────────
-# Card grid
+# Cards (네이티브 구성: 가로 병렬, HTML 없음)
+#  - "도구 모음" 타이틀 제거
+#  - 클릭 즉시 해당 페이지로 이동 (st.page_link)
 # ─────────────────────────────────────────────────────────────
-CATALOG = [
-    {"key": k, "title": t, "desc": d, "icon_b64": resolve_icon_b64(i)}
-    for k, (t, d, i, _) in NAV_MAP.items()
-]
+# 첫 줄
+c1, c2, c3 = st.columns(3)
+with c1:
+    st.write("### Cover Image")
+    st.write("상품 커버 썸네일 합성기")
+    st.page_link("pages/1_Cover Image.py", label="열기 →", icon="🖼️")
 
-st.markdown(
-    """
-    <style>
-      .ui-grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));}
-      .ui-card{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);
-               border-radius:16px;padding:18px 18px 16px 18px;text-decoration:none !important;
-               transition:transform .12s ease,border-color .12s ease,background .12s ease;display:block;}
-      .ui-card:hover{transform:translateY(-1px);border-color:rgba(255,255,255,.24);background:rgba(255,255,255,.06);}
-      .ui-card .row{display:flex;align-items:center;gap:10px;}
-      .ui-card .title{font-weight:700;font-size:18px;margin:0;}
-      .ui-card .desc{color:rgba(255,255,255,.7);margin:8px 0 0 0;font-size:14px;}
-      .ui-card img{width:22px;height:22px;object-fit:contain;opacity:.9;}
-      a.ui-card,a.ui-card:visited,a.ui-card:hover{color:inherit;}
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+with c2:
+    st.write("### Copy Template")
+    st.write("3종 템플릿 복사/업로드")
+    st.page_link("pages/2_Copy Template.py", label="열기 →", icon="📄")
 
-st.subheader("도구 모음")
-st.write("")
-
-u = current_user()
-st.markdown('<div class="ui-grid">', unsafe_allow_html=True)
-for c in CATALOG:
-    href = f"?nav={quote(c['key'])}"
-    if u:
-        href += f"&user={quote(u)}"
-    b64 = c["icon_b64"] or ""
-    st.markdown(
-        f"""
-        <a class="ui-card" href="{href}" target="_self">
-          <div class="row">
-            {'<img src="data:image/png;base64,'+b64+'" alt="icon"/>' if b64 else ''}
-            <div class="title">{c["title"]}</div>
-          </div>
-          <p class="desc">{c["desc"]}</p>
-        </a>
-        """,
-        unsafe_allow_html=True,
-    )
-st.markdown('</div>', unsafe_allow_html=True)
+with c3:
+    st.write("### Create Template")
+    st.write("템플릿 생성/전처리/내보내기")
+    st.page_link("pages/3_Create Template.py", label="열기 →", icon="⚙️")
 
 st.divider()
-st.caption("Version: v3-safe (no user_manager dependency)")
+st.caption("Version: v4 (light + native cards)")
