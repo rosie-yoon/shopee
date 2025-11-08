@@ -1,30 +1,35 @@
-# Home.py (v4 - light + native cards)
+# Home.py (v4 clean)
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+
 from pathlib import Path
-from urllib.parse import quote
-
 import streamlit as st
-# from ui_theme import apply_theme  # ❌ 다크 테마 제거
 
+# ─────────────────────────────────────────────────────────────
+# Page config
+# ─────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Shopee Support Tools",
     layout="wide",
     initial_sidebar_state="collapsed",
+)
 
 # ─────────────────────────────────────────────────────────────
-# Auth/session helpers (user_manager 없이 동작)
+# Auth/session helpers (user_manager 미의존 버전)
 # ─────────────────────────────────────────────────────────────
 SESSION_USER_KEY = "user"
 SESSION_AUTH_KEY = "is_logged_in"
 
 def is_logged_in() -> bool:
-    return bool(st.session_state.get(SESSION_AUTH_KEY)) and bool(st.session_state.get(SESSION_USER_KEY))
+    return bool(st.session_state.get(SESSION_AUTH_KEY)) and bool(
+        st.session_state.get(SESSION_USER_KEY)
+    )
 
 def current_user() -> str:
     return st.session_state.get(SESSION_USER_KEY, "") or ""
 
 def pin_user_query(username: str) -> bool:
+    """?user= 을 세션 사용자로 고정. 실제 변경되면 True(= rerun 권장)."""
     if not username:
         return False
     qp = dict(st.query_params)
@@ -35,6 +40,9 @@ def pin_user_query(username: str) -> bool:
     return True
 
 def do_login(username: str) -> None:
+    username = (username or "").strip()
+    if not username:
+        return
     st.session_state[SESSION_USER_KEY] = username
     st.session_state[SESSION_AUTH_KEY] = True
     if pin_user_query(username):
@@ -65,6 +73,7 @@ left, right = st.columns([1, 1])
 with left:
     st.title("Shopee Support Tools")
 st.caption("운영/지원 자동화를 위한 툴킷")
+st.divider()
 
 # ─────────────────────────────────────────────────────────────
 # Login panel
@@ -92,26 +101,31 @@ else:
 st.divider()
 
 # ─────────────────────────────────────────────────────────────
-# Cards (네이티브 구성: 가로 병렬, HTML 없음)
-#  - "도구 모음" 타이틀 제거
-#  - 클릭 즉시 해당 페이지로 이동 (st.page_link)
+# Cards with your PNG icons (no emoji fallback)
 # ─────────────────────────────────────────────────────────────
-# 첫 줄
+ICON_DIR = Path(__file__).resolve().parent / "assets/icons"
+
+def find_icon(name: str):
+    for cand in (ICON_DIR / f"{name}@3x.png", ICON_DIR / f"{name}.png"):
+        if cand.exists():
+            return cand
+    return None
+
+def render_card(col, icon_name: str, title: str, desc: str, page_path: str):
+    with col:
+        p = find_icon(icon_name)
+        if p:
+            st.image(str(p), width=28)
+        else:
+            st.write("")  # 아이콘 없을 때만 여백
+        st.write(f"### {title}")
+        st.caption(desc)
+        st.page_link(page_path, label="열기 →")
+
 c1, c2, c3 = st.columns(3)
-with c1:
-    st.write("### Cover Image")
-    st.write("상품 커버 썸네일 합성기")
-    st.page_link("pages/1_Cover Image.py", label="열기 →", icon="🖼️")
-
-with c2:
-    st.write("### Copy Template")
-    st.write("3종 템플릿 복사/업로드")
-    st.page_link("pages/2_Copy Template.py", label="열기 →", icon="📄")
-
-with c3:
-    st.write("### Create Template")
-    st.write("템플릿 생성/전처리/내보내기")
-    st.page_link("pages/3_Create Template.py", label="열기 →", icon="⚙️")
+render_card(c1, "design", "Cover Image", "상품 커버 썸네일 합성기", "pages/1_Cover Image.py")
+render_card(c2, "copy", "Copy Template", "3종 템플릿 복사/업로드", "pages/2_Copy Template.py")
+render_card(c3, "create", "Create Template", "템플릿 생성/전처리/내보내기", "pages/3_Create Template.py")
 
 st.divider()
-st.caption("Version: v4 (light + native cards)")
+st.caption("Version: v4 clean")
