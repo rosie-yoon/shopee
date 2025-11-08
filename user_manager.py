@@ -51,9 +51,21 @@ def login(username: str) -> bool:
 
     return False
 
+def _restore_current_user_if_possible() -> None:
+    """세션에 username만 남은 경우 users.json에서 프로필을 다시 불러온다."""
+    username = st.session_state.get("username")
+    if not username or "current_user" in st.session_state:
+        return
+
+    users = load_users()
+    profile = users.get(username)
+    if isinstance(profile, dict):
+        st.session_state["current_user"] = profile
+
 
 def is_logged_in() -> bool:
-    """로그인 여부 확인"""
+    """로그인 여부 확인 (필요 시 프로필 복구)"""
+    _restore_current_user_if_possible()
     return "username" in st.session_state and "current_user" in st.session_state
 
 
@@ -101,6 +113,7 @@ def update_user_profile(updates: dict[str, str | None]) -> None:
         save_users(users)
 
     st.session_state["current_user"] = profile
+_restore_current_user_if_possible()
 
 
 def ensure_login_persistence():
@@ -108,12 +121,6 @@ def ensure_login_persistence():
     Streamlit rerun 시 로그인 세션 복원
     - username만 남고 current_user가 사라진 경우 재로딩
     """
-    if "username" in st.session_state and "current_user" not in st.session_state:
-        users = load_users()
-        uname = st.session_state["username"]
-        if uname in users:
-            st.session_state["current_user"] = users[uname]
-
 
 def pin_user_query():
     """
