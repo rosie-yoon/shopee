@@ -1,0 +1,15 @@
+[server]
+fileWatcherType = "poll"               # inotify 대신 폴링 사용
+folderWatchBlacklist = [
+  ".git",
+  "venv",
+  "node_modules",
+  "assets",
+  "image_compose/assets",
+  "image_compose/output",
+  "images",
+  "data",
+]
+
+[client]
+toolbarMode = "minimal"
