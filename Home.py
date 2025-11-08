@@ -1,156 +1,195 @@
-# Home.py
+# Home.py (v3-safe, no user_manager dependency)
 # -*- coding: utf-8 -*-
-import base64
+from __future__ import annotations
 from pathlib import Path
 from urllib.parse import quote
+import base64
+
 import streamlit as st
-import sys
+from ui_theme import apply_theme
 
-# --- import path fix (Streamlit Cloud 호환) : 반드시 user_manager 임포트보다 먼저 ---
-ROOT = Path(__file__).resolve().parent   # /mount/src/shopee
-PARENT = ROOT.parent                     # /mount/src
-for p in (ROOT, PARENT):
-    if str(p) not in sys.path:
-        sys.path.insert(0, str(p))
-# ------------------------------------------------------------------------------
-
-# user_manager 임포트 (중복 금지)
-from user_manager import (
-    is_logged_in, login, logout,
-    get_current_user, pin_user_query
-)
-
-# 기본 설정
+# ─────────────────────────────────────────────────────────────
+# Page config & theme
+# ─────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Shopee Support Tools",
     layout="wide",
-    initial_sidebar_state="expanded" if is_logged_in() else "collapsed",
+    initial_sidebar_state="collapsed",
 )
+apply_theme()
 
-# 사이드바 표시 상태 제어 (로그인 전 숨김 / 로그인 후 표시)
-if not is_logged_in():
-    st.markdown("<style>section[data-testid='stSidebar']{display:none !important;}</style>", unsafe_allow_html=True)
-else:
-    st.markdown("<style>section[data-testid='stSidebar']{display:block !important;}</style>", unsafe_allow_html=True)
-
-# URL의 ?nav= 경로가 있으면 해당 페이지로 전환
-def _switch_by_query():
-    try:
-        nav = st.query_params.get("nav", None)
-        if isinstance(nav, list):
-            nav = nav[0] if nav else None
-    except Exception:
-        nav = st.experimental_get_query_params().get("nav", [None])[0]
-    if nav:
-        st.switch_page(nav)
-
-_switch_by_query()
-
-# 아이콘 유틸
+# ─────────────────────────────────────────────────────────────
+# Constants
+# ─────────────────────────────────────────────────────────────
+SESSION_USER_KEY = "user"
+SESSION_AUTH_KEY = "is_logged_in"
 ICON_DIR = Path("assets/icons")
 
-def resolve_icon(name: str) -> Path:
-    hi = ICON_DIR / f"{name}@3x.png"
-    lo = ICON_DIR / f"{name}.png"
-    return hi if hi.exists() else lo
-
-def icon_b64(path: Path) -> str:
-    try:
-        with open(path, "rb") as f:
-            return base64.b64encode(f.read()).decode()
-    except Exception:
-        return ""
-
-ICONS = {
-    "cover":  resolve_icon("cover"),
-    "copy":   resolve_icon("copy"),
-    "create": resolve_icon("create"),
+NAV_MAP = {
+    # key: (표시제목, 설명, 아이콘명, switch_page 대상)
+    "cover": ("Cover Image", "상품 커버 썸네일 합성기", "design", "pages/1_Cover Image.py"),
+    "template": ("Copy Template", "3종 템플릿 복사/업로드", "copy", "pages/2_Copy Template.py"),
+    "automation": ("Create Template", "템플릿 생성/전처리/내보내기", "create", "pages/3_Create Template.py"),
 }
 
-# 로그인 섹션 (미로그인 시)
-st.title("Shopee Support Tools")
-st.divider()
+# ─────────────────────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────────────────────
+def _find_icon_path(name: str) -> Path | None:
+    for p in (ICON_DIR / f"{name}@3x.png", ICON_DIR / f"{name}.png"):
+        if p.exists():
+            return p
+    return None
 
-if not is_logged_in():
-    st.subheader("🔐 Login")
-    username = st.text_input("사용자 이름을 입력하세요", placeholder="예: yeojin")
-    if st.button("로그인", type="primary", use_container_width=False) and username.strip():
-        if login(username.strip()):
-            st.success("로그인 성공!")
-            st.query_params["user"] = username.strip()  # URL에 user 고정
-            st.rerun()
-        else:
-            st.error("등록되지 않은 사용자입니다. 관리자에게 문의하세요.")
-    st.caption("버전: v3.2")
-    st.stop()
+def resolve_icon_b64(name: str) -> str | None:
+    p = _find_icon_path(name)
+    if not p:
+        return None
+    try:
+        return base64.b64encode(p.read_bytes()).decode("utf-8")
+    except Exception:
+        return None
 
-# 로그인 통과 직후 user 쿼리 다시 고정
-pin_user_query()
+def is_logged_in() -> bool:
+    return bool(st.session_state.get(SESSION_AUTH_KEY)) and bool(st.session_state.get(SESSION_USER_KEY))
 
-# 현재 사용자 정보
-user = get_current_user()
-display_name = (user.get("display_name") if isinstance(user, dict) else None) \
-               or st.session_state.get("username", "")
+def current_user() -> str:
+    return st.session_state.get(SESSION_USER_KEY, "") or ""
 
-# 상단 헤더
-left, mid, right = st.columns([6, 4, 2])
-with left:
-    st.subheader(f"환영합니다, {display_name} 😊")
-with right:
-    if st.button("로그아웃"):
-        logout()
+def pin_user_query(username: str) -> bool:
+    """
+    ?user= 값을 세션 사용자로 고정. 변경이 실제 발생하면 True 반환(= rerun 필요).
+    """
+    if not username:
+        return False
+    qp = dict(st.query_params)
+    if qp.get("user") == username:
+        return False
+    qp["user"] = username
+    st.query_params = qp
+    return True
+
+def do_login(username: str) -> None:
+    st.session_state[SESSION_USER_KEY] = username
+    st.session_state[SESSION_AUTH_KEY] = True
+    if pin_user_query(username):
         st.rerun()
 
+def do_logout(clear_nav: bool = True) -> None:
+    st.session_state.pop(SESSION_USER_KEY, None)
+    st.session_state.pop(SESSION_AUTH_KEY, None)
+    qp = dict(st.query_params)
+    qp.pop("user", None)
+    if clear_nav:
+        qp.pop("nav", None)
+    st.query_params = qp
+    st.rerun()
+
+def handle_nav():
+    """
+    ?nav= 이 있고 로그인된 경우 해당 페이지로 switch_page
+    """
+    nav = st.query_params.get("nav")
+    if not nav or nav not in NAV_MAP:
+        return
+    if not is_logged_in():
+        return
+    pin_user_query(current_user())  # 안전핀
+    target = NAV_MAP[nav][3]
+    st.switch_page(target)
+
+# ─────────────────────────────────────────────────────────────
+# Auth bootstrap (딥링크 복구 → nav 처리)
+# ─────────────────────────────────────────────────────────────
+qp_user = st.query_params.get("user")
+if qp_user and not is_logged_in():
+    st.session_state[SESSION_USER_KEY] = qp_user
+    st.session_state[SESSION_AUTH_KEY] = True
+
+handle_nav()
+
+# ─────────────────────────────────────────────────────────────
+# Header
+# ─────────────────────────────────────────────────────────────
+left, right = st.columns([1, 1])
+with left:
+    st.title("Shopee Support Tools")
+st.caption("운영/지원 자동화를 위한 툴킷")
+
+# ─────────────────────────────────────────────────────────────
+# Login panel
+# ─────────────────────────────────────────────────────────────
+if not is_logged_in():
+    st.info("로그인이 필요합니다. 사용자명을 입력해 로그인해 주세요.")
+    with st.form("login_form"):
+        username = st.text_input("사용자명", value=qp_user or "", placeholder="ex) yeojin")
+        ok = st.form_submit_button("로그인", use_container_width=True)
+    if ok:
+        if not username.strip():
+            st.error("사용자명을 입력해 주세요.")
+        else:
+            do_login(username.strip())
+            st.stop()
+else:
+    u = current_user()
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        st.success(f"✅ 로그인됨: **{u}**")
+    with c2:
+        if st.button("로그아웃", use_container_width=True):
+            do_logout()
+
 st.divider()
 
-# 현재 로그인 사용자 쿼리 유지용
-try:
-    q = st.query_params
-except Exception:
-    q = st.experimental_get_query_params()
-user_q = q.get("user")
-user_q = (user_q[0] if isinstance(user_q, list) else user_q) if user_q else None
-
-cards = [
-    {"icon": ICONS["cover"],  "title": "Cover Image",   "desc": "썸네일로 사용할 커버 이미지 생성", "path": "pages/1_Cover Image.py"},
-    {"icon": ICONS["copy"],   "title": "Copy Template", "desc": "복제용 Mass Upload 템플릿 생성", "path": "pages/2_Copy Template.py"},
-    {"icon": ICONS["create"], "title": "Create Template","desc":"신규 상품 Mass Upload 템플릿 생성","path": "pages/3_Create Template.py"},
+# ─────────────────────────────────────────────────────────────
+# Card grid
+# ─────────────────────────────────────────────────────────────
+CATALOG = [
+    {"key": k, "title": t, "desc": d, "icon_b64": resolve_icon_b64(i)}
+    for k, (t, d, i, _) in NAV_MAP.items()
 ]
 
-st.markdown("""
-<style>
-  .ui-card{ background:#ffffff;border-radius:16px;padding:14px 16px 16px;
-            box-shadow:0 4px 18px rgba(0,0,0,.1);min-height:130px;transition:transform .15s}
-  .ui-card:hover{ background:#f9fafb; transform:translateY(-1px) }
-  a.card-link{ display:block; text-decoration:none !important; color:inherit !important; }
-  .row{ display:flex; align-items:center; gap:10px; margin-bottom:6px; }
-  .row img{ width:36px; height:36px; }
-  .row .title{ font-weight:800; font-size:1.1rem; margin:0; color:#111827; }
-  .desc{ margin:0; color:#374151; }
-</style>
-""", unsafe_allow_html=True)
+st.markdown(
+    """
+    <style>
+      .ui-grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));}
+      .ui-card{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);
+               border-radius:16px;padding:18px 18px 16px 18px;text-decoration:none !important;
+               transition:transform .12s ease,border-color .12s ease,background .12s ease;display:block;}
+      .ui-card:hover{transform:translateY(-1px);border-color:rgba(255,255,255,.24);background:rgba(255,255,255,.06);}
+      .ui-card .row{display:flex;align-items:center;gap:10px;}
+      .ui-card .title{font-weight:700;font-size:18px;margin:0;}
+      .ui-card .desc{color:rgba(255,255,255,.7);margin:8px 0 0 0;font-size:14px;}
+      .ui-card img{width:22px;height:22px;object-fit:contain;opacity:.9;}
+      a.ui-card,a.ui-card:visited,a.ui-card:hover{color:inherit;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-cols = st.columns(3)
-for col, c in zip(cols, cards):
-    with col:
-        b64 = icon_b64(c["icon"])
-        href = f"?nav={quote(c['path'])}"
-        if user_q:
-            href = f"{href}&user={quote(user_q)}"
-        st.markdown(
-            f"""
-            <a class="card-link" href="{href}" target="_self" rel="noopener">
-              <div class="ui-card">
-                <div class="row">
-                  {'<img src="data:image/png;base64,'+b64+'" alt="icon"/>' if b64 else ''}
-                  <div class="title">{c["title"]}</div>
-                </div>
-                <p class="desc">{c["desc"]}</p>
-              </div>
-            </a>
-            """,
-            unsafe_allow_html=True,
-        )
+st.subheader("도구 모음")
+st.write("")
+
+u = current_user()
+st.markdown('<div class="ui-grid">', unsafe_allow_html=True)
+for c in CATALOG:
+    href = f"?nav={quote(c['key'])}"
+    if u:
+        href += f"&user={quote(u)}"
+    b64 = c["icon_b64"] or ""
+    st.markdown(
+        f"""
+        <a class="ui-card" href="{href}" target="_self">
+          <div class="row">
+            {'<img src="data:image/png;base64,'+b64+'" alt="icon"/>' if b64 else ''}
+            <div class="title">{c["title"]}</div>
+          </div>
+          <p class="desc">{c["desc"]}</p>
+        </a>
+        """,
+        unsafe_allow_html=True,
+    )
+st.markdown('</div>', unsafe_allow_html=True)
 
 st.divider()
-st.caption("버전: v3.2")
+st.caption("Version: v3-safe (no user_manager dependency)")

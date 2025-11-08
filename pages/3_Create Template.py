@@ -1,29 +1,29 @@
 # pages/3_Create Template.py
 # -*- coding: utf-8 -*-
-import streamlit as st
+
+# 1) 표준 라이브러리
 from pathlib import Path
 import sys
 import io
 import time
 from contextlib import redirect_stdout
 import traceback
+import os
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Page config & import path (로컬/Cloud 공통)
-# ──────────────────────────────────────────────────────────────────────────────
+# 2) Streamlit 설정
+import streamlit as st
 st.set_page_config(page_title="Create Template", layout="wide")
 
+# 3) 프로젝트 루트 경로 보정
 ROOT = Path(__file__).resolve().parents[1]   # .../shopee
-PARENT = ROOT.parent                          # .../mount/src
+PARENT = ROOT.parent                          # 환경에 따라 필요할 수 있음
 for p in (ROOT, PARENT):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 핵심 임포트 (심플 버전)
-#   - profile_sidebar.py는 자급자족 버전이어야 함(외부 유틸 미의존)
-# ──────────────────────────────────────────────────────────────────────────────
-from user_manager import is_logged_in, get_user_pref, ensure_login_persistence, pin_user_query
+# 4) 내부 모듈 import
+from auth_guard import bootstrap_auth
+from user_manager import get_user_pref
 from profile_sidebar import render_profile_sidebar
 
 from shopee_creator.controller import ShopeeCreator
@@ -31,15 +31,12 @@ from shopee_creator.utils_creator import extract_sheet_id, get_env
 import shopee_creator.creation_steps as steps
 from shopee_creator.creation_steps import export_tem_xlsx  # XLSX만 사용
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 접근 제한 & 프로필 사이드바 / 사용자 프로필 → 세션 기본값
-# ──────────────────────────────────────────────────────────────────────────────
-ensure_login_persistence()
-if not is_logged_in():
-    st.warning("로그인이 필요합니다. 먼저 사용자명을 입력해 로그인해 주세요.")
-    st.stop()
+# 5) 인증 부트스트랩
+bootstrap_auth(go_home=False)
 
-pin_user_query()  # ← 이 줄 추가!
+# 6) 페이지 본문
+st.title("Create Template")
+st.markdown("---")
 
 # 공통 프로필 사이드바 (Create 전용 키로 저장/로드)
 #  - users.json 키: create_sheet_id / create_image_host
@@ -63,11 +60,9 @@ st.session_state.setdefault(
 # 다운로드 바이트 세션 기본값 (XLSX만)
 st.session_state.setdefault("DL_XLSX", None)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Main
-# ──────────────────────────────────────────────────────────────────────────────
-st.title("Create Template")
-st.markdown("---")
+# ──────────────────────────────────────────────────────────────
+# 1. 파일 및 샵 코드 입력
+# ──────────────────────────────────────────────────────────────
 st.subheader("1. 파일 및 샵 코드 입력")
 
 sid = st.session_state.get("SOURCE_SPREADSHEET_ID", "")
@@ -82,9 +77,9 @@ shop_code_input = st.text_input(
 run_enabled = bool(sid and shop_code_input.strip())
 run_clicked = st.button("🚀 실행", type="primary", use_container_width=True, disabled=not run_enabled)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 실행: 단계별 호출 (C1→C2→C7→C3→C4→C5→C6)
-# ──────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────
+# 2. 실행: 단계별 호출 (C1→C2→C7→C3→C4→C5→C6)
+# ──────────────────────────────────────────────────────────────
 if run_clicked:
     shop_code = shop_code_input.strip()
     st.session_state["SHOP_CODE"] = shop_code
@@ -161,9 +156,9 @@ if run_clicked:
             st.session_state["DL_XLSX"] = None
             st.warning(f"다운로드 생성 중 오류: {ex}")
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 2. 최종 파일 다운로드
-# ──────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────
+# 3. 최종 파일 다운로드
+# ──────────────────────────────────────────────────────────────
 st.markdown("---")
 st.subheader("2. 최종 파일 다운로드")
 

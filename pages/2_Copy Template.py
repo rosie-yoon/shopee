@@ -1,40 +1,34 @@
 # pages/2_Copy Template.py
+# -*- coding: utf-8 -*-
+
+# 1) 표준 라이브러리
 from pathlib import Path
 import sys
-import streamlit as st
+import os
 
-# ⚠️ set_page_config는 첫 호출 전에
+# 2) Streamlit 설정
+import streamlit as st
 st.set_page_config(page_title="Copy Template", layout="wide")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# import path (로컬/Cloud 모두 호환)
-# ─────────────────────────────────────────────────────────────────────────────
+# 3) 프로젝트 루트 경로 보정
 ROOT = Path(__file__).resolve().parents[1]   # .../shopee
-PARENT = ROOT.parent                          # .../mount/src
-for p in (ROOT, PARENT):
-    if str(p) not in sys.path:
-        sys.path.insert(0, str(p))
+if str(ROOT) not in sys.path:
+    sys.path.append(str(ROOT))
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 핵심 임포트 (심플 버전)  ← 여기만 정확히 정리하면 됨
-# ─────────────────────────────────────────────────────────────────────────────
-from user_manager import is_logged_in, get_user_pref, ensure_login_persistence, pin_user_query
+# 4) 내부 모듈 import
+from auth_guard import bootstrap_auth, current_user
+from user_manager import get_user_pref
 from profile_sidebar import render_profile_sidebar
 from item_uploader.app import run as item_uploader_run
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 접근 제한: 로그인 복원 → 가드
-# ─────────────────────────────────────────────────────────────────────────────
-ensure_login_persistence()
-if not is_logged_in():
-    st.warning("로그인이 필요합니다. 먼저 로그인해 주세요.")
-    st.stop()
+# 5) 인증 부트스트랩
+bootstrap_auth(go_home=False)
 
-pin_user_query()  # ✅ 여기서 고정
+# 6) 페이지 본문
+st.title("Copy Template")
+st.caption("3종 템플릿 복사/업로드")
 
-# ─────────────────────────────────────────────────────────────────────────────
 # 프로필 사이드바 (Copy 전용 키)
-# ─────────────────────────────────────────────────────────────────────────────
 render_profile_sidebar(sheet_key="copy_sheet_id", host_key="copy_image_host")
 
 # 사용자 프로필 → 세션 기본값 주입 (item_uploader가 사용)
@@ -57,21 +51,15 @@ with st.sidebar:
         """
     )
 
-# ==============================
-# 메인 실행 (env 동기화 → 실행)
-# ==============================
-import os
-
+# 실행 전 env 동기화 → 실행
 def _sync_env_from_session():
     sid = st.session_state.get("GOOGLE_SHEETS_SPREADSHEET_ID", "")
     host = st.session_state.get("IMAGE_HOSTING_URL", "")
     if sid:
         os.environ["GOOGLE_SHEETS_SPREADSHEET_ID"] = sid
-        # 별칭 키를 쓰는 코드 대비
-        os.environ["GOOGLE_SHEET_KEY"] = sid
+        os.environ["GOOGLE_SHEET_KEY"] = sid  # 별칭 키 대비
     if host:
         os.environ["IMAGE_HOSTING_URL"] = host
 
 _sync_env_from_session()
 item_uploader_run()
-
