@@ -11,8 +11,6 @@ st.set_page_config(
     page_title="Shopee Support Tools",
     layout="wide",
     initial_sidebar_state="collapsed",
-)
-# apply_theme()  # ❌ 호출 제거 (다크 스타일 비활성)
 
 # ─────────────────────────────────────────────────────────────
 # Auth/session helpers (user_manager 없이 동작)

@@ -1,24 +1,63 @@
 # profile_sidebar.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+
 import re
 from pathlib import Path
+import sys
 import streamlit as st
 
-# 루트 경로를 sys.path에 추가 (Cloud/Local 호환)
-import sys
-ROOT = Path(__file__).resolve().parent         # .../shopee
-PARENT = ROOT.parent                           # .../mount/src
-for p in (ROOT, PARENT):
-    if str(p) not in sys.path:
-        sys.path.insert(0, str(p))
+# ─────────────────────────────────────────────────────────────
+# Import path (ROOT만 추가: 감시 범위 최소화)
+# ─────────────────────────────────────────────────────────────
+ROOT = Path(__file__).resolve().parent  # .../shopee
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-# user_manager만 의존 (필수)
-from user_manager import is_logged_in, get_user_pref, update_user_profile
+# ─────────────────────────────────────────────────────────────
+# user_manager 안전 임포트
+#  - update_user_profile이 없으면 폴백(_update_user_profile) 정의
+# ─────────────────────────────────────────────────────────────
+from user_manager import is_logged_in, get_user_pref  # 필수 심볼
 
-# ------------------------
+try:
+    # 권장 최신 인터페이스
+    from user_manager import update_user_profile as _update_user_profile
+except Exception:
+    # 폴백: set_user_profile_value / set_user_pref 중 가능한 것으로 저장
+    try:
+        from user_manager import set_user_profile_value as _set_profile_value
+    except Exception:
+        _set_profile_value = None  # type: ignore[assignment]
+    try:
+        from user_manager import set_user_pref as _set_user_pref
+    except Exception:
+        _set_user_pref = None  # type: ignore[assignment]
+
+    def _update_user_profile(data: dict | None = None, **kwargs) -> bool:  # noqa: N802
+        """
+        update_user_profile이 없는 환경을 위한 폴백.
+        현재 로그인 사용자의 프로필에 data/kwargs를 병합 저장.
+        """
+        updated = False
+        if isinstance(data, dict):
+            for k, v in data.items():
+                if _set_profile_value:
+                    updated |= bool(_set_profile_value(k, v))  # type: ignore[misc]
+                elif _set_user_pref:
+                    _set_user_pref(k, v)  # type: ignore[misc]
+                    updated = True
+        for k, v in kwargs.items():
+            if _set_profile_value:
+                updated |= bool(_set_profile_value(k, v))  # type: ignore[misc]
+            elif _set_user_pref:
+                _set_user_pref(k, v)  # type: ignore[misc]
+                updated = True
+        return updated
+
+# ─────────────────────────────────────────────────────────────
 # 내부 헬퍼(외부 유틸 무의존)
-# ------------------------
+# ─────────────────────────────────────────────────────────────
 _SPREAD_RE = re.compile(r"/spreadsheets/d/([A-Za-z0-9\-_]+)")
 
 def extract_sheet_id(s: str | None) -> str | None:
@@ -45,7 +84,7 @@ def _safe_save_env(key: str, value: str) -> None:
     """
     try:
         env_path = ROOT / ".env"
-        mapping = {}
+        mapping: dict[str, str] = {}
         if env_path.exists():
             for line in env_path.read_text(encoding="utf-8").splitlines():
                 if not line.strip() or line.lstrip().startswith("#") or "=" not in line:
@@ -55,14 +94,15 @@ def _safe_save_env(key: str, value: str) -> None:
         mapping[key] = value
         env_path.write_text(
             "\n".join(f"{k}={v}" for k, v in mapping.items()) + "\n",
-            encoding="utf-8"
+            encoding="utf-8",
         )
     except Exception:
+        # Cloud 환경 등에서 권한/파일 문제 시 조용히 무시
         pass
 
-# ------------------------
+# ─────────────────────────────────────────────────────────────
 # 공개 API: 사이드바 렌더
-# ------------------------
+# ─────────────────────────────────────────────────────────────
 def render_profile_sidebar(
     *,
     sheet_key: str,
@@ -72,8 +112,8 @@ def render_profile_sidebar(
 ) -> None:
     """
     사용자 프로필의 특정 키(sheet_key/host_key)를 편집/저장하는 사이드바 컴포넌트.
-    - users.json의 해당 키를 가져와 기본값 표시
-    - 저장 시 users.json + session_state + (옵션) .env를 업데이트
+    - user_manager의 프로필 값을 기본값으로 표시
+    - 저장 시 user_manager에 반영 + session_state 갱신
     """
     with st.sidebar:
         if not is_logged_in():
@@ -93,7 +133,7 @@ def render_profile_sidebar(
         # 입력 폼
         sheet_url = st.text_input(
             sheet_label,
-            value=(sheet_link(cur_sid) if cur_sid else ""),
+            value=sheet_link(cur_sid) if cur_sid else "",
             placeholder="https://docs.google.com/spreadsheets/d/...",
             key=f"{sheet_key}_url",
         )
@@ -114,8 +154,8 @@ def render_profile_sidebar(
                 st.error("이미지 호스팅 주소를 확인해주세요. (http/https)")
                 return
 
-            # users.json 업데이트
-            update_user_profile({sheet_key: sid, host_key: image_host})
+            # user_manager에 저장 (안전 폴백 포함)
+            _update_user_profile({sheet_key: sid, host_key: image_host})
 
             # 세션/레거시/로컬 .env 갱신
             st.session_state[sheet_key] = sid

@@ -19,7 +19,7 @@ import streamlit as st
 # ─────────────────────────────────────────────────────────────
 SESSION_USER_KEY = "user"
 SESSION_AUTH_KEY = "is_logged_in"
-SESSION_PREFS_KEY = "USER_PREFS"        # { username: {k: v, ...}, ... }
+SESSION_PREFS_KEY = "USER_PREFS"  # { username: {k: v, ...}, ... }
 
 # ─────────────────────────────────────────────────────────────
 # Basic state helpers
@@ -69,19 +69,14 @@ def pin_user_query(username: Optional[str] = None) -> bool:
 
 # Backward-compatible alias (pages가 호출하던 이름 유지)
 def ensure_login_persistence() -> None:
-    """
-    Legacy helper. Just restores session from query if needed.
-    No rerun inside; caller may choose to rerun after pinning.
-    """
+    """Legacy helper. Just restores session from query if needed."""
     sync_from_query()
 
 # ─────────────────────────────────────────────────────────────
 # Auth actions
 # ─────────────────────────────────────────────────────────────
 def login(username: str, *, pin_query: bool = True, rerun: bool = True) -> None:
-    """
-    Set session as authenticated and (optionally) pin ?user.
-    """
+    """Set session as authenticated and (optionally) pin ?user."""
     username = (username or "").strip()
     if not username:
         raise ValueError("username is required")
@@ -91,9 +86,7 @@ def login(username: str, *, pin_query: bool = True, rerun: bool = True) -> None:
         st.rerun()
 
 def logout(*, clear_query: bool = True, also_clear_nav: bool = True, rerun: bool = True) -> None:
-    """
-    Clear session auth & (optionally) clear query params (?user, ?nav).
-    """
+    """Clear session auth & (optionally) clear query params (?user, ?nav)."""
     st.session_state.pop(SESSION_USER_KEY, None)
     st.session_state.pop(SESSION_AUTH_KEY, None)
     if clear_query:
@@ -107,8 +100,6 @@ def logout(*, clear_query: bool = True, also_clear_nav: bool = True, rerun: bool
 
 # ─────────────────────────────────────────────────────────────
 # Per-user preferences (in-memory)
-#   - stored in st.session_state["USER_PREFS"] as:
-#     { "<username>": { "key": value, ... }, ... }
 # ─────────────────────────────────────────────────────────────
 def _ensure_prefs_root() -> Dict[str, Dict[str, Any]]:
     if SESSION_PREFS_KEY not in st.session_state:
@@ -122,9 +113,7 @@ def _prefs_for(user: str) -> Dict[str, Any]:
     return root[user]
 
 def get_user_pref(key: str, default: Any = None, user: Optional[str] = None) -> Any:
-    """
-    Read a preference value for a user.
-    """
+    """Read a preference value for a user."""
     user = user or get_current_user("")
     if not user:
         return default
@@ -132,23 +121,55 @@ def get_user_pref(key: str, default: Any = None, user: Optional[str] = None) -> 
     return prefs.get(key, default)
 
 def set_user_pref(key: str, value: Any, user: Optional[str] = None) -> None:
-    """
-    Save a preference value for a user.
-    """
+    """Save a preference value for a user."""
     user = user or get_current_user("")
     if not user:
-        # no-op if no user context
         return
     prefs = _prefs_for(user)
     prefs[key] = value
 
 # ─────────────────────────────────────────────────────────────
-# Optional: convenience guards (lightweight, no UI side effects)
+# Optional: convenience guards
 # ─────────────────────────────────────────────────────────────
 def require_login() -> None:
-    """
-    Raise Streamlit stop if not logged in.
-    (Callers should show UI message before calling this if needed.)
-    """
+    """Raise Streamlit stop if not logged in."""
     if not is_logged_in():
         st.stop()
+
+# ─────────────────────────────────────────────────────────────
+# Compatibility helpers expected by profile_sidebar.py
+# ─────────────────────────────────────────────────────────────
+def get_user_profile(default: Optional[Dict[str, Any]] = None):
+    """Return full profile dict for current user."""
+    user = get_current_user("")
+    if not user:
+        return default
+    return _prefs_for(user)
+
+def update_user_profile(data: Optional[Dict[str, Any]] = None, **kwargs) -> bool:
+    """
+    Update current user's profile.
+    Accepts either a dict `data` or keyword args.
+    Returns True if updated.
+    """
+    user = get_current_user("")
+    if not user:
+        return False
+    prefs = _prefs_for(user)
+    if data and isinstance(data, dict):
+        prefs.update(data)
+    if kwargs:
+        prefs.update(kwargs)
+    return True
+
+# Some legacy code may import a shortened name:
+update_user_prof = update_user_profile  # alias
+
+def set_user_profile_value(key: str, value: Any) -> bool:
+    """Set a single profile key for current user."""
+    user = get_current_user("")
+    if not user:
+        return False
+    prefs = _prefs_for(user)
+    prefs[key] = value
+    return True
