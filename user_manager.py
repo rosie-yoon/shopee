@@ -74,6 +74,34 @@ def get_user_pref(key: str, default=None):
     user = get_current_user()
     return user.get(key, default)
 
+def update_user_profile(updates: dict[str, str | None]) -> None:
+    """현재 로그인된 사용자의 프로필을 업데이트."""
+    if not isinstance(updates, dict) or not is_logged_in():
+        return
+
+    username = st.session_state.get("username")
+    if not username:
+        return
+
+    users = load_users()
+    profile = users.get(username, {})
+    if not isinstance(profile, dict):
+        profile = {}
+
+    changed = False
+    for key, value in updates.items():
+        if value is None:
+            continue
+        if profile.get(key) != value:
+            profile[key] = value
+            changed = True
+
+    if changed or username not in users:
+        users[username] = profile
+        save_users(users)
+
+    st.session_state["current_user"] = profile
+
 
 def ensure_login_persistence():
     """
