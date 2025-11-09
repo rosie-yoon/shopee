@@ -22,10 +22,10 @@ if str(ROOT) not in sys.path:
 # 4) 내부 모듈 import
 from auth_guard import bootstrap_auth
 from user_manager import get_user_pref
-from profile_sidebar import render_profile_sidebar
+from profile_sidebar import render_profile_sidebar, extract_sheet_id
 
 from shopee_creator.controller import ShopeeCreator
-from shopee_creator.utils_creator import extract_sheet_id, get_env
+from shopee_creator.utils_creator import get_env
 import shopee_creator.creation_steps as steps
 from shopee_creator.creation_steps import export_tem_xlsx  # XLSX만 사용
 
