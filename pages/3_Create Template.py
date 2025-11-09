@@ -217,31 +217,42 @@ if run_clicked:
             st.error(f"다운로드 생성 중 오류: {ex}")
 
 # ──────────────────────────────────────────────
-# 3. 다운로드 섹션
+# 3. 최종 파일 다운로드
 # ──────────────────────────────────────────────
 st.markdown("---")
 st.subheader("2. 최종 파일 다운로드")
 
 file_base = (st.session_state.get("SHOP_CODE") or "TEM") + "_TEM_OUTPUT"
-xlsx_bytes = st.session_state.get("DL_XLSX")
-txt_data = st.session_state.get("DL_TEXT")
 
-col1, col2 = st.columns(2)
-with col1:
-    st.download_button(
-        "📥 템플릿 파일 다운로드 (.xlsx)",
-        data=(xlsx_bytes or b""),
-        file_name=f"{file_base}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-        disabled=not bool(xlsx_bytes),
-    )
-with col2:
-    st.download_button(
-        "📄 텍스트 결과 다운로드 (.txt)",
-        data=(txt_data or ""),
-        file_name=f"{file_base}.txt",
-        mime="text/plain; charset=utf-8",
-        use_container_width=True,
-        disabled=not bool(txt_data),
-    )
+try:
+    # export_tem_xlsx() 결과를 확실히 바이트로 변환
+    out = st.session_state.get("DL_XLSX")
+    if not out:
+        # 필요 시 다시 시도 (export_tem_xlsx는 BytesIO 예상)
+        from shopee_creator.creation_steps import export_tem_xlsx
+        ctrl = ShopeeCreator(st.secrets)
+        gs = ctrl.gs
+        sid = st.session_state.get("SOURCE_SPREADSHEET_ID")
+        sh = gs.open_by_key(sid)
+        xio = export_tem_xlsx(sh)
+        if hasattr(xio, "getvalue"):
+            out = xio.getvalue()
+        elif hasattr(xio, "getbuffer"):
+            out = xio.getbuffer().tobytes()
+        elif isinstance(xio, bytes):
+            out = xio
+        else:
+            out = None
+    # 엑셀 매직 헤더 확인 (PK 시작)
+    if isinstance(out, (bytes, bytearray)) and out[:2] == b"PK":
+        st.download_button(
+            "📥 템플릿 파일 다운로드 (.xlsx)",
+            data=out,
+            file_name=f"{file_base}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+    else:
+        st.error("❌ 생성된 파일이 올바른 엑셀 형식이 아닙니다. TEM_OUTPUT 시트를 확인해 주세요.")
+except Exception as e:
+    st.error(f"다운로드 생성 중 오류 발생: {e}")
