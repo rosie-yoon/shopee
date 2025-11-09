@@ -1,25 +1,30 @@
-# pages/3_Create Template.py
+# pages/3_Create Template.py (v6 clean)
 # -*- coding: utf-8 -*-
 
-# 1) 표준 라이브러리
 from pathlib import Path
 import sys
 import io
 import time
-from contextlib import redirect_stdout
 import traceback
 import os
-
-# 2) Streamlit 설정
+from contextlib import redirect_stdout
 import streamlit as st
+
+# ──────────────────────────────────────────────
+# Page Config
+# ──────────────────────────────────────────────
 st.set_page_config(page_title="Create Template", layout="wide")
 
-# 3) 프로젝트 루트 경로 보정
+# ──────────────────────────────────────────────
+# Project Path Fix
+# ──────────────────────────────────────────────
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
-# 4) 내부 모듈 import
+# ──────────────────────────────────────────────
+# Internal Imports
+# ──────────────────────────────────────────────
 from auth_guard import bootstrap_auth
 from user_manager import get_user_pref
 from profile_sidebar import render_profile_sidebar, extract_sheet_id
@@ -27,17 +32,23 @@ from profile_sidebar import render_profile_sidebar, extract_sheet_id
 from shopee_creator.controller import ShopeeCreator
 from shopee_creator.utils_creator import get_env
 import shopee_creator.creation_steps as steps
-from shopee_creator.creation_steps import export_tem_xlsx  # XLSX만 사용
+from shopee_creator.creation_steps import export_tem_xlsx
 
-# 5) 인증 부트스트랩
+# ──────────────────────────────────────────────
+# Auth Bootstrap
+# ──────────────────────────────────────────────
 bootstrap_auth(go_home=False)
 
-# 6) 페이지 본문
+# ──────────────────────────────────────────────
+# Header
+# ──────────────────────────────────────────────
 st.title("Create Template")
+st.caption("템플릿 생성 / 전처리 / 내보내기")
 st.markdown("---")
 
-# 공통 프로필 사이드바 (Create 전용 키로 저장/로드)
-#  - users.json 키: create_sheet_id / create_image_host
+# ──────────────────────────────────────────────
+# Sidebar: User Profile (Create 전용 키 사용)
+# ──────────────────────────────────────────────
 render_profile_sidebar(
     sheet_key="create_sheet_id",
     host_key="create_image_host",
@@ -45,17 +56,20 @@ render_profile_sidebar(
     host_label="Image Hosting URL",
 )
 
-# 로그인 사용자 프로필 → SID/Host 확정(파일/세션/시크릿) → 세션 주입
+# ──────────────────────────────────────────────
+# Resolve Sheet ID & Host from Session / Profile / Secret
+# ──────────────────────────────────────────────
 def resolve_create_sid() -> str:
-    # 1) 세션 우선
     sid = (st.session_state.get("SOURCE_SPREADSHEET_ID") or "").strip()
     if not sid:
-        # 2) 프로필(파일) → URL이면 ID로 정제
         raw = get_user_pref("create_sheet_id") or get_user_pref("sheet_id")
         sid = extract_sheet_id(str(raw)) if raw else ""
     if not sid:
-        # 3) 시크릿 폴백
-        raw = st.secrets.get("SOURCE_SPREADSHEET_ID") or st.secrets.get("GOOGLE_SHEETS_SPREADSHEET_ID") or st.secrets.get("GOOGLE_SHEET_KEY")
+        raw = (
+            st.secrets.get("SOURCE_SPREADSHEET_ID")
+            or st.secrets.get("GOOGLE_SHEETS_SPREADSHEET_ID")
+            or st.secrets.get("GOOGLE_SHEET_KEY")
+        )
         sid = extract_sheet_id(str(raw)) if raw else ""
     return sid or ""
 
@@ -74,52 +88,45 @@ host = resolve_create_host()
 st.session_state["SOURCE_SPREADSHEET_ID"] = sid
 st.session_state["IMAGE_BASE_URL"] = host
 
-
-# 다운로드 바이트 세션 기본값 (XLSX만)
+# 기본 세션값
 st.session_state.setdefault("DL_XLSX", None)
+st.session_state.setdefault("DL_TEXT", None)
 
-# ──────────────────────────────────────────────────────────────
-# 1. 파일 및 샵 코드 입력
-# ──────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────
+# 1. 입력 구역
+# ──────────────────────────────────────────────
 st.subheader("1. 파일 및 샵 코드 입력")
-
-# SID / BASE_URL 확정 및 안내
-sid = st.session_state.get("SOURCE_SPREADSHEET_ID", "")
-base_url = st.session_state.get("IMAGE_BASE_URL", "")
 
 with st.sidebar:
     if not sid:
         st.warning("상품등록 시트 URL/ID가 설정되지 않았습니다. 사이드바에서 저장 후 다시 시도하세요.")
     else:
-        st.caption(f"사용 중인 Source Sheet ID: `{sid}`")
-    if base_url:
-        st.caption(f"Image Base URL: {base_url}")
-
+        st.caption(f"📄 Source Sheet ID: `{sid}`")
+    if host:
+        st.caption(f"🖼️ Image Base URL: {host}")
 
 shop_code_input = st.text_input(
     "샵 코드 입력",
     value=st.session_state.get("SHOP_CODE", ""),
     placeholder="예: RO, 01 등 커버 이미지 코드와 동일하게 입력하세요.",
 )
-
 run_enabled = bool(sid and shop_code_input.strip())
 run_clicked = st.button("🚀 실행", type="primary", use_container_width=True, disabled=not run_enabled)
 
-# ──────────────────────────────────────────────────────────────
-# 2. 실행: 단계별 호출 (C1→C2→C7→C3→C4→C5→C6)
-# ──────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────
+# 2. 실행 및 생성
+# ──────────────────────────────────────────────
 if run_clicked:
     shop_code = shop_code_input.strip()
     st.session_state["SHOP_CODE"] = shop_code
 
     ctrl = ShopeeCreator(st.secrets)
-    if base_url or shop_code:
+    if base_url := host:
         try:
             ctrl.set_image_base(base_url=base_url, shop_code=shop_code)
         except Exception:
             pass
 
-    # 입력 시트 오픈
     try:
         gs = ctrl.gs
         sh = gs.open_by_key(sid)
@@ -127,8 +134,11 @@ if run_clicked:
         st.error(f"입력 시트 열기 실패: {e}")
         st.stop()
 
-    # 레퍼런스 시트 열기
-    ref_id_or_url = st.secrets.get("REFERENCE_SPREADSHEET_ID") or st.secrets.get("REFERENCE_SPREADSHEET_URL") or ""
+    ref_id_or_url = (
+        st.secrets.get("REFERENCE_SPREADSHEET_ID")
+        or st.secrets.get("REFERENCE_SPREADSHEET_URL")
+        or ""
+    )
     try:
         rid = extract_sheet_id(str(ref_id_or_url))
         ref = gs.open_by_key(rid)
@@ -136,17 +146,16 @@ if run_clicked:
         st.error(f"레퍼런스 시트 열기 실패: secrets에 REFERENCE_SPREADSHEET_ID/URL을 확인하세요.\n\nError: {e}")
         st.stop()
 
-    # 프로그레스바
     progress = st.progress(0.0, text="시작합니다…")
 
     run_list = [
-        ("C1 Initialize",             lambda: steps.run_step_C1(sh, ref)),
-        ("C2 Collection → TEM",       lambda: steps.run_step_C2(sh, ref)),
-        ("C7 Mandatory Defaults",     lambda: steps.run_step_C7_mandatory_defaults(sh, ref)),
-        ("C3 FDA",                    lambda: steps.run_step_C3_fda(sh, ref)),
-        ("C4 Prices",                 lambda: steps.run_step_C4_prices(sh)),
-        ("C5 Images",                 lambda: steps.run_step_C5_images(sh=sh, base_url=base_url, shop_code=shop_code)),
-        ("C6 Stock/Weight/Brand",     lambda: steps.run_step_C6_stock_weight_brand(sh)),
+        ("C1 Initialize", lambda: steps.run_step_C1(sh, ref)),
+        ("C2 Collection → TEM", lambda: steps.run_step_C2(sh, ref)),
+        ("C7 Mandatory Defaults", lambda: steps.run_step_C7_mandatory_defaults(sh, ref)),
+        ("C3 FDA", lambda: steps.run_step_C3_fda(sh, ref)),
+        ("C4 Prices", lambda: steps.run_step_C4_prices(sh)),
+        ("C5 Images", lambda: steps.run_step_C5_images(sh=sh, base_url=base_url, shop_code=shop_code)),
+        ("C6 Stock/Weight/Brand", lambda: steps.run_step_C6_stock_weight_brand(sh)),
     ]
 
     total = len(run_list)
@@ -154,14 +163,13 @@ if run_clicked:
 
     for i, (name, fn) in enumerate(run_list, start=1):
         try:
-            progress.progress((i-1)/total, text=f"{name} 실행 중…")
-            buf = io.StringIO()
-            with redirect_stdout(buf):
+            progress.progress((i - 1) / total, text=f"{name} 실행 중…")
+            with redirect_stdout(io.StringIO()):
                 fn()
             time.sleep(0.2)
-            progress.progress(i/total, text=f"{name} 완료")
+            progress.progress(i / total, text=f"{name} 완료")
         except Exception:
-            progress.progress((i-1)/total, text=f"{name} 실패")
+            progress.progress((i - 1) / total, text=f"{name} 실패")
             st.error(f"실행 실패: {name} 단계에서 오류가 발생했습니다.")
             with st.expander("자세한 오류", expanded=False):
                 st.code(traceback.format_exc())
@@ -169,35 +177,71 @@ if run_clicked:
             break
 
     if ok:
-        progress.progress(1.0, text="모든 단계 완료")
+        progress.progress(1.0, text="모든 단계 완료 ✅")
         st.success("모든 단계가 정상 완료되었습니다! 🎉")
 
-        # 실행 직후 내보내기
+        # ───── 다운로드 생성 (바이트 형식 검증)
         try:
-            xio = export_tem_xlsx(sh)
-            if xio:
-                st.session_state["DL_XLSX"] = xio.getvalue()
+            out = export_tem_xlsx(sh)
+            xlsx_bytes, txt_fallback = None, None
+
+            if hasattr(out, "getbuffer"):
+                xlsx_bytes = out.getbuffer().tobytes()
+            elif hasattr(out, "getvalue"):
+                gv = out.getvalue()
+                if isinstance(gv, (bytes, bytearray)):
+                    xlsx_bytes = gv
+                elif isinstance(gv, str):
+                    txt_fallback = gv
+            elif isinstance(out, bytes):
+                xlsx_bytes = out
+            elif isinstance(out, str):
+                txt_fallback = out
+
+            if xlsx_bytes and not xlsx_bytes.startswith(b"PK\x03\x04"):
+                txt_fallback = xlsx_bytes.decode("utf-8", errors="ignore")
+                xlsx_bytes = None
+
+            st.session_state["DL_XLSX"] = xlsx_bytes
+            st.session_state["DL_TEXT"] = txt_fallback
+
+            if xlsx_bytes:
+                st.success("엑셀 파일을 생성했습니다.")
+            elif txt_fallback:
+                st.warning("엑셀 형식이 아닌 텍스트 결과가 생성되었습니다. 아래에서 텍스트로 다운로드 가능합니다.")
             else:
-                st.session_state["DL_XLSX"] = None
-                st.warning("엑셀 내보내기 생성에 실패했습니다. TEM_OUTPUT 시트를 확인해 주세요.")
+                st.warning("출력 데이터가 없습니다. TEM_OUTPUT 시트를 확인하세요.")
         except Exception as ex:
             st.session_state["DL_XLSX"] = None
-            st.warning(f"다운로드 생성 중 오류: {ex}")
+            st.session_state["DL_TEXT"] = None
+            st.error(f"다운로드 생성 중 오류: {ex}")
 
-# ──────────────────────────────────────────────────────────────
-# 3. 최종 파일 다운로드
-# ──────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────
+# 3. 다운로드 섹션
+# ──────────────────────────────────────────────
 st.markdown("---")
 st.subheader("2. 최종 파일 다운로드")
 
 file_base = (st.session_state.get("SHOP_CODE") or "TEM") + "_TEM_OUTPUT"
 xlsx_bytes = st.session_state.get("DL_XLSX")
+txt_data = st.session_state.get("DL_TEXT")
 
-st.download_button(
-    "📥 템플릿 파일 다운로드 (.xlsx)",
-    data=(xlsx_bytes or b""),
-    file_name=f"{file_base}.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    use_container_width=True,
-    disabled=not bool(xlsx_bytes),
-)
+col1, col2 = st.columns(2)
+with col1:
+    st.download_button(
+        "📥 템플릿 파일 다운로드 (.xlsx)",
+        data=(xlsx_bytes or b""),
+        file_name=f"{file_base}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+        disabled=not bool(xlsx_bytes),
+    )
+with col2:
+    st.download_button(
+        "📄 텍스트 결과 다운로드 (.txt)",
+        data=(txt_data or ""),
+        file_name=f"{file_base}.txt",
+        mime="text/plain; charset=utf-8",
+        use_container_width=True,
+        disabled=not bool(txt_data),
+    )
