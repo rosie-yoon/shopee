@@ -101,9 +101,9 @@ with st.sidebar:
     if not sid:
         st.warning("상품등록 시트 URL/ID가 설정되지 않았습니다. 사이드바에서 저장 후 다시 시도하세요.")
     else:
-        st.caption(f"📄 Source Sheet ID: `{sid}`")
+        st.caption(f"Source Sheet ID: `{sid}`")
     if host:
-        st.caption(f"🖼️ Image Base URL: {host}")
+        st.caption(f"Image Base URL: {host}")
 
 shop_code_input = st.text_input(
     "샵 코드 입력",
