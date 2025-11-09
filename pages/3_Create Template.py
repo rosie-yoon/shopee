@@ -15,11 +15,9 @@ import streamlit as st
 st.set_page_config(page_title="Create Template", layout="wide")
 
 # 3) 프로젝트 루트 경로 보정
-ROOT = Path(__file__).resolve().parents[1]   # .../shopee
-PARENT = ROOT.parent                          # 환경에 따라 필요할 수 있음
-for p in (ROOT, PARENT):
-    if str(p) not in sys.path:
-        sys.path.insert(0, str(p))
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.append(str(ROOT))
 
 # 4) 내부 모듈 import
 from auth_guard import bootstrap_auth
@@ -47,15 +45,35 @@ render_profile_sidebar(
     host_label="Image Hosting URL",
 )
 
-# 로그인 사용자 프로필 → 세션 매핑
-st.session_state.setdefault(
-    "SOURCE_SPREADSHEET_ID",
-    get_user_pref("create_sheet_id") or get_user_pref("sheet_id")
-)
-st.session_state.setdefault(
-    "IMAGE_BASE_URL",
-    get_user_pref("create_image_host") or get_user_pref("image_host") or get_user_pref("default_image_host")
-)
+# 로그인 사용자 프로필 → SID/Host 확정(파일/세션/시크릿) → 세션 주입
+def resolve_create_sid() -> str:
+    # 1) 세션 우선
+    sid = (st.session_state.get("SOURCE_SPREADSHEET_ID") or "").strip()
+    if not sid:
+        # 2) 프로필(파일) → URL이면 ID로 정제
+        raw = get_user_pref("create_sheet_id") or get_user_pref("sheet_id")
+        sid = extract_sheet_id(str(raw)) if raw else ""
+    if not sid:
+        # 3) 시크릿 폴백
+        raw = st.secrets.get("SOURCE_SPREADSHEET_ID") or st.secrets.get("GOOGLE_SHEETS_SPREADSHEET_ID") or st.secrets.get("GOOGLE_SHEET_KEY")
+        sid = extract_sheet_id(str(raw)) if raw else ""
+    return sid or ""
+
+def resolve_create_host() -> str:
+    return (
+        st.session_state.get("IMAGE_BASE_URL")
+        or get_user_pref("create_image_host")
+        or get_user_pref("image_host")
+        or get_user_pref("default_image_host")
+        or ""
+    )
+
+sid = resolve_create_sid()
+host = resolve_create_host()
+
+st.session_state["SOURCE_SPREADSHEET_ID"] = sid
+st.session_state["IMAGE_BASE_URL"] = host
+
 
 # 다운로드 바이트 세션 기본값 (XLSX만)
 st.session_state.setdefault("DL_XLSX", None)
@@ -65,8 +83,18 @@ st.session_state.setdefault("DL_XLSX", None)
 # ──────────────────────────────────────────────────────────────
 st.subheader("1. 파일 및 샵 코드 입력")
 
+# SID / BASE_URL 확정 및 안내
 sid = st.session_state.get("SOURCE_SPREADSHEET_ID", "")
 base_url = st.session_state.get("IMAGE_BASE_URL", "")
+
+with st.sidebar:
+    if not sid:
+        st.warning("상품등록 시트 URL/ID가 설정되지 않았습니다. 사이드바에서 저장 후 다시 시도하세요.")
+    else:
+        st.caption(f"사용 중인 Source Sheet ID: `{sid}`")
+    if base_url:
+        st.caption(f"Image Base URL: {base_url}")
+
 
 shop_code_input = st.text_input(
     "샵 코드 입력",

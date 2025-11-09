@@ -111,7 +111,7 @@ def render_card(col, icon_name: str, title: str, desc: str, page_path: str):
                 st.warning("페이지 이동에 실패했습니다. 사이드바 메뉴를 이용해 주세요.")
 
 c1, c2, c3 = st.columns(3)
-render_card(c1, "design", "Cover Image", "상품 커버 썸네일 합성기", "pages/1_Cover Image.py")
+render_card(c1, "cover", "Cover Image", "상품 커버 썸네일 합성기", "pages/1_Cover Image.py")
 render_card(c2, "copy", "Copy Template", "3종 템플릿 복사/업로드", "pages/2_Copy Template.py")
 render_card(c3, "create", "Create Template", "템플릿 생성/전처리/내보내기", "pages/3_Create Template.py")
 

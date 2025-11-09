@@ -31,35 +31,52 @@ st.caption("3종 템플릿 복사/업로드")
 # 프로필 사이드바 (Copy 전용 키)
 render_profile_sidebar(sheet_key="copy_sheet_id", host_key="copy_image_host")
 
-# 사용자 프로필 → 세션 기본값 주입 (item_uploader가 사용)
-st.session_state.setdefault(
-    "GOOGLE_SHEETS_SPREADSHEET_ID",
-    get_user_pref("copy_sheet_id") or get_user_pref("sheet_id")
-)
-st.session_state.setdefault(
-    "IMAGE_HOSTING_URL",
-    get_user_pref("copy_image_host") or get_user_pref("image_host") or get_user_pref("default_image_host")
-)
+# ==============================
+# ENV 보장: 프로필/세션/시크릿 순으로 SID/Host 확정 → ENV 주입
+# ==============================
+from profile_sidebar import extract_sheet_id  # 중복 import면 이 줄은 생략하세요
 
-# (선택) 안내 문구
-with st.sidebar:
-    st.write("")  # 한 줄 여백
-    st.markdown(
-        """
-* [샵 복제 시트 템플릿](https://docs.google.com/spreadsheets/d/1l5DK-1lNGHFPfl7mbI6sTR_qU1cwHg2-tlBXzY2JhbI/edit?gid=0#gid=0)의 사본을 생성하여 위 Google Sheets URL에 입력해주세요.  
-* 사본 생성 시, 시트의 안내사항을 꼭 확인해주세요.
-        """
+def resolve_copy_sid() -> str:
+    sid = (st.session_state.get("GOOGLE_SHEETS_SPREADSHEET_ID") or "").strip()
+    if not sid:
+        raw = get_user_pref("copy_sheet_id") or get_user_pref("sheet_id")
+        sid = extract_sheet_id(str(raw)) if raw else ""
+    if not sid:
+        raw = st.secrets.get("GOOGLE_SHEETS_SPREADSHEET_ID") or st.secrets.get("GOOGLE_SHEET_KEY")
+        sid = extract_sheet_id(str(raw)) if raw else ""
+    return sid or ""
+
+def resolve_copy_host() -> str:
+    return (
+        st.session_state.get("IMAGE_HOSTING_URL")
+        or get_user_pref("copy_image_host")
+        or get_user_pref("image_host")
+        or get_user_pref("default_image_host")
+        or ""
     )
 
-# 실행 전 env 동기화 → 실행
-def _sync_env_from_session():
-    sid = st.session_state.get("GOOGLE_SHEETS_SPREADSHEET_ID", "")
-    host = st.session_state.get("IMAGE_HOSTING_URL", "")
-    if sid:
-        os.environ["GOOGLE_SHEETS_SPREADSHEET_ID"] = sid
-        os.environ["GOOGLE_SHEET_KEY"] = sid  # 별칭 키 대비
-    if host:
-        os.environ["IMAGE_HOSTING_URL"] = host
+sid = resolve_copy_sid()
+host = resolve_copy_host()
 
-_sync_env_from_session()
+# 주입 (+별칭) 및 세션 동기화
+if sid:
+    os.environ["GOOGLE_SHEETS_SPREADSHEET_ID"] = sid
+    os.environ["GOOGLE_SHEET_KEY"] = sid
+    st.session_state["GOOGLE_SHEETS_SPREADSHEET_ID"] = sid
+else:
+    with st.sidebar:
+        st.warning("Google Sheets URL/ID가 설정되지 않았습니다. 사이드바에서 저장 후 다시 시도하세요.")
+    st.stop()
+
+if host:
+    os.environ["IMAGE_HOSTING_URL"] = host
+    st.session_state["IMAGE_HOSTING_URL"] = host
+
+with st.sidebar:
+    st.caption(f"사용 중인 Sheet ID: `{sid}`")
+
+# ==============================
+# 메인 실행
+# ==============================
 item_uploader_run()
+

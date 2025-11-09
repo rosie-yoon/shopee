@@ -1,17 +1,17 @@
-# user_manager.py
+# user_manager.py (clean, file-backed)
 # -*- coding: utf-8 -*-
 """
-Lightweight user/session manager for Streamlit apps.
+User/session & profile manager for Streamlit apps.
 
 - No side effects on import (DO NOT call st.set_page_config here)
-- Unified helpers for:
-  * login/logout
-  * query<->session sync (user pinning)
-  * per-user preferences (in-memory via st.session_state)
+- Auth helpers: login/logout, query<->session sync (user pinning)
+- Profile prefs: file-backed (data/users.json) + session cache
 """
 
 from __future__ import annotations
 from typing import Any, Dict, Optional
+from pathlib import Path
+import json
 import streamlit as st
 
 # ─────────────────────────────────────────────────────────────
@@ -22,27 +22,54 @@ SESSION_AUTH_KEY = "is_logged_in"
 SESSION_PREFS_KEY = "USER_PREFS"  # { username: {k: v, ...}, ... }
 
 # ─────────────────────────────────────────────────────────────
+# File-backed profiles (data/users.json)
+# ─────────────────────────────────────────────────────────────
+_PROFILES_CACHE: Optional[Dict[str, Dict[str, Any]]] = None
+
+def _profiles_path() -> Path:
+    # user_manager.py 위치 기준 ../data/users.json
+    return Path(__file__).resolve().parent / "data" / "users.json"
+
+def _load_profiles() -> Dict[str, Dict[str, Any]]:
+    global _PROFILES_CACHE
+    if _PROFILES_CACHE is not None:
+        return _PROFILES_CACHE
+    p = _profiles_path()
+    if p.exists():
+        try:
+            _PROFILES_CACHE = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            _PROFILES_CACHE = {}
+    else:
+        _PROFILES_CACHE = {}
+    return _PROFILES_CACHE
+
+def _save_profiles(profiles: Dict[str, Dict[str, Any]]) -> None:
+    global _PROFILES_CACHE
+    _PROFILES_CACHE = profiles
+    p = _profiles_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(profiles, ensure_ascii=False, indent=2), encoding="utf-8")
+
+def _profile_for(user: str) -> Dict[str, Any]:
+    profs = _load_profiles()
+    return dict(profs.get(user) or {})
+
+# ─────────────────────────────────────────────────────────────
 # Basic state helpers
 # ─────────────────────────────────────────────────────────────
 def is_logged_in() -> bool:
-    """Return True if a user is authenticated."""
     return bool(st.session_state.get(SESSION_AUTH_KEY)) and bool(
         st.session_state.get(SESSION_USER_KEY)
     )
 
 def get_current_user(default: str = "") -> str:
-    """Get current username from session_state (or default)."""
     return st.session_state.get(SESSION_USER_KEY, default) or default
 
 # ─────────────────────────────────────────────────────────────
 # Query <-> Session synchronization
 # ─────────────────────────────────────────────────────────────
 def sync_from_query() -> bool:
-    """
-    If ?user is present and session is not authenticated, restore session from query.
-    Returns:
-        changed (bool): True if session_state has been updated.
-    """
     qp_user = st.query_params.get("user")
     if qp_user and not is_logged_in():
         st.session_state[SESSION_USER_KEY] = qp_user
@@ -51,32 +78,23 @@ def sync_from_query() -> bool:
     return False
 
 def pin_user_query(username: Optional[str] = None) -> bool:
-    """
-    Pin ?user=<username> in the URL.
-    If the URL already has the same user, do nothing.
-    Returns:
-        updated (bool): True when query was actually changed (rerun recommended).
-    """
     username = username or get_current_user("")
     if not username:
         return False
-    qp = dict(st.query_params)  # copy
+    qp = dict(st.query_params)
     if qp.get("user") == username:
         return False
     qp["user"] = username
     st.query_params = qp
     return True
 
-# Backward-compatible alias (pages가 호출하던 이름 유지)
 def ensure_login_persistence() -> None:
-    """Legacy helper. Just restores session from query if needed."""
     sync_from_query()
 
 # ─────────────────────────────────────────────────────────────
 # Auth actions
 # ─────────────────────────────────────────────────────────────
 def login(username: str, *, pin_query: bool = True, rerun: bool = True) -> None:
-    """Set session as authenticated and (optionally) pin ?user."""
     username = (username or "").strip()
     if not username:
         raise ValueError("username is required")
@@ -86,7 +104,6 @@ def login(username: str, *, pin_query: bool = True, rerun: bool = True) -> None:
         st.rerun()
 
 def logout(*, clear_query: bool = True, also_clear_nav: bool = True, rerun: bool = True) -> None:
-    """Clear session auth & (optionally) clear query params (?user, ?nav)."""
     st.session_state.pop(SESSION_USER_KEY, None)
     st.session_state.pop(SESSION_AUTH_KEY, None)
     if clear_query:
@@ -99,7 +116,7 @@ def logout(*, clear_query: bool = True, also_clear_nav: bool = True, rerun: bool
         st.rerun()
 
 # ─────────────────────────────────────────────────────────────
-# Per-user preferences (in-memory)
+# Session-cached preferences (in-memory)
 # ─────────────────────────────────────────────────────────────
 def _ensure_prefs_root() -> Dict[str, Dict[str, Any]]:
     if SESSION_PREFS_KEY not in st.session_state:
@@ -112,64 +129,91 @@ def _prefs_for(user: str) -> Dict[str, Any]:
         root[user] = {}
     return root[user]
 
+# ─────────────────────────────────────────────────────────────
+# Public profile API (file → session → default)
+# ─────────────────────────────────────────────────────────────
 def get_user_pref(key: str, default: Any = None, user: Optional[str] = None) -> Any:
-    """Read a preference value for a user."""
     user = user or get_current_user("")
     if not user:
         return default
+    # 1) file-backed
+    f = _profile_for(user)
+    if key in f:
+        return f.get(key, default)
+    # 2) session-cached
     prefs = _prefs_for(user)
     return prefs.get(key, default)
 
 def set_user_pref(key: str, value: Any, user: Optional[str] = None) -> None:
-    """Save a preference value for a user."""
     user = user or get_current_user("")
     if not user:
         return
+    # session
     prefs = _prefs_for(user)
     prefs[key] = value
+    # file
+    profs = _load_profiles()
+    if user not in profs:
+        profs[user] = {}
+    profs[user][key] = value
+    _save_profiles(profs)
 
-# ─────────────────────────────────────────────────────────────
-# Optional: convenience guards
-# ─────────────────────────────────────────────────────────────
-def require_login() -> None:
-    """Raise Streamlit stop if not logged in."""
-    if not is_logged_in():
-        st.stop()
-
-# ─────────────────────────────────────────────────────────────
-# Compatibility helpers expected by profile_sidebar.py
-# ─────────────────────────────────────────────────────────────
-def get_user_profile(default: Optional[Dict[str, Any]] = None):
-    """Return full profile dict for current user."""
+def get_user_profile(default: Optional[Dict[str, Any]] = None) -> Dict[str, Any] | None:
     user = get_current_user("")
     if not user:
         return default
-    return _prefs_for(user)
+    # merge: file base + session overlay
+    base = _profile_for(user)
+    sess = _prefs_for(user)
+    merged = dict(base)
+    merged.update(sess)
+    return merged
 
 def update_user_profile(data: Optional[Dict[str, Any]] = None, **kwargs) -> bool:
-    """
-    Update current user's profile.
-    Accepts either a dict `data` or keyword args.
-    Returns True if updated.
-    """
     user = get_current_user("")
     if not user:
         return False
-    prefs = _prefs_for(user)
-    if data and isinstance(data, dict):
-        prefs.update(data)
+    payload: Dict[str, Any] = {}
+    if isinstance(data, dict):
+        payload.update(data)
     if kwargs:
-        prefs.update(kwargs)
+        payload.update(kwargs)
+    if not payload:
+        return True
+
+    # session update
+    prefs = _prefs_for(user)
+    prefs.update(payload)
+
+    # file update
+    profs = _load_profiles()
+    base = dict(profs.get(user) or {})
+    base.update(payload)
+    profs[user] = base
+    _save_profiles(profs)
     return True
 
-# Some legacy code may import a shortened name:
-update_user_prof = update_user_profile  # alias
+# legacy alias some code may import
+update_user_prof = update_user_profile
 
 def set_user_profile_value(key: str, value: Any) -> bool:
-    """Set a single profile key for current user."""
     user = get_current_user("")
     if not user:
         return False
+    # session
     prefs = _prefs_for(user)
     prefs[key] = value
+    # file
+    profs = _load_profiles()
+    base = dict(profs.get(user) or {})
+    base[key] = value
+    profs[user] = base
+    _save_profiles(profs)
     return True
+
+# ─────────────────────────────────────────────────────────────
+# Guards
+# ─────────────────────────────────────────────────────────────
+def require_login() -> None:
+    if not is_logged_in():
+        st.stop()
