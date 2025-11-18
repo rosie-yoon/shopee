@@ -29,19 +29,41 @@ from .utils_common import get_env, join_url, forward_fill_by_group
 
 # === automation_steps.py 공통 헬퍼 함수 이식 ===
 
-def _find_col_index(keys: List[str], name: str, extra_alias: List[str]=[]) -> int:
-    """헤더 키 목록(keys=header_key 적용된 리스트)에서 name 또는 alias를 찾음"""
+def _find_col_index(keys: List[str], name: str, extra_alias: List[str] = []) -> int:
+    """
+    헤더 키 목록(keys=header_key 적용된 리스트)에서 name 또는 alias를 찾음
+    - 1순위: name(타겟)의 정확 매칭
+    - 2순위: alias의 정확 매칭
+    - 3순위: name의 부분 일치
+    - 4순위: alias의 부분 일치
+    """
     tgt = header_key(name)
-    aliases = [header_key(a) for a in extra_alias] + [tgt]
-    # 정확 매칭
+    alias_keys = [header_key(a) for a in extra_alias if a]
+
+    # 1) 정확 매칭 - 타겟 우선
+    if tgt:
+        for i, k in enumerate(keys):
+            if k == tgt:
+                return i
+
+    # 2) 정확 매칭 - alias
     for i, k in enumerate(keys):
-        if k in aliases:
+        if k in alias_keys:
             return i
-    # 포함 매칭
+
+    # 3) 부분 일치 - 타겟 우선
+    if tgt:
+        for i, k in enumerate(keys):
+            if tgt in k:
+                return i
+
+    # 4) 부분 일치 - alias
     for i, k in enumerate(keys):
-        if any(a and a in k for a in aliases):
+        if any(a and a in k for a in alias_keys):
             return i
+
     return -1
+
 
 # _pick_index_by_candidates (Weight 매핑을 위해 이식)
 def _pick_index_by_candidates(header_row: List[str], candidates: List[str]) -> int:
