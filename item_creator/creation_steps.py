@@ -33,29 +33,29 @@ def _find_col_index(keys: List[str], name: str, extra_alias: List[str] = []) -> 
     """
     헤더 키 목록(keys=header_key 적용된 리스트)에서 name 또는 alias를 찾음
     - 1순위: name(타겟)의 정확 매칭
-    - 2순위: alias의 정확 매칭
-    - 3순위: name의 부분 일치
+    - 2순위: name(타겟)의 부분 일치 (예: productname ⊂ productnameeng)
+    - 3순위: alias의 정확 매칭
     - 4순위: alias의 부분 일치
     """
     tgt = header_key(name)
     alias_keys = [header_key(a) for a in extra_alias if a]
 
-    # 1) 정확 매칭 - 타겟 우선
+    # 1) 정확 매칭 - 타겟
     if tgt:
         for i, k in enumerate(keys):
             if k == tgt:
                 return i
 
-    # 2) 정확 매칭 - alias
-    for i, k in enumerate(keys):
-        if k in alias_keys:
-            return i
-
-    # 3) 부분 일치 - 타겟 우선
+    # 2) 부분 일치 - 타겟 (productname ⊂ productnameeng 같은 케이스용)
     if tgt:
         for i, k in enumerate(keys):
             if tgt in k:
                 return i
+
+    # 3) 정확 매칭 - alias
+    for i, k in enumerate(keys):
+        if k in alias_keys and (not tgt or k != tgt):
+            return i
 
     # 4) 부분 일치 - alias
     for i, k in enumerate(keys):
