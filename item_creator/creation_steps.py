@@ -124,7 +124,7 @@ def _collect_indices(header_row: List[str]) -> Dict[str, int]:
         "sku": idx("sku", ["seller_sku"]),
         "brand": idx("brand", ["brandname"]),
         "option_eng": idx("option(eng)", ["optioneng", "option", "option1", "option name", "option for variation 1"]),
-        "prod_name": idx("product name", ["item(eng)", "itemeng", "name"]),
+        "prod_name": idx("product name", ["name"]),
         "desc": idx("description", ["product description"]),
         "category": idx("category"),
         "detail_idx": idx("details index", ["detail image count", "details count", "detailindex"]),
