@@ -115,20 +115,22 @@ def run_step_C1(sh: gspread.Spreadsheet, ref: Optional[gspread.Spreadsheet]):
 # Collection 헤더 인덱스 수집
 def _collect_indices(header_row: List[str]) -> Dict[str, int]:
     keys = [header_key(x) for x in header_row]
-    def idx(name: str, aliases: List[str] = []) -> int:
-        return _find_col_index(keys, name, extra_alias=aliases)
+    key_to_idx = {k: i for i, k in enumerate(keys)}
 
     return {
-        "create": idx("create", ["use", "apply"]),
-        "variation": idx("variation", ["variationno", "variationintegrationno", "var code", "variation code"]),
-        "sku": idx("sku", ["seller_sku"]),
-        "brand": idx("brand", ["brandname"]),
-        "option_eng": idx("option(eng)", ["optioneng", "option", "option1", "option name", "option for variation 1"]),
-        "prod_name": idx("product name", ["name"]),
-        "desc": idx("description", ["product description"]),
-        "category": idx("category"),
-        "detail_idx": idx("details index", ["detail image count", "details count", "detailindex"]),
+        "create": key_to_idx.get("create", 0),
+        "variation": key_to_idx.get("parentsku", 1),  # 실제 사용하는 컬럼 이름에 맞게
+        "sku": key_to_idx.get("sku", 2),
+        "brand": key_to_idx.get("brand", 3),
+        "item_eng": key_to_idx.get("itemeng", 4),
+        "option_eng": key_to_idx.get("optioneng", 5),
+        "prod_name": key_to_idx.get("productname", 6),
+        "desc_draft": key_to_idx.get("descriptiondraft", 7),
+        "desc": key_to_idx.get("description", 8),
+        "category": key_to_idx.get("category", 9),
+        "detail_idx": key_to_idx.get("detailsindex", 10),
     }
+
 
 
 def _is_true(v: str) -> bool:
@@ -148,6 +150,9 @@ def run_step_C2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
         return
 
     colmap = _collect_indices(coll_vals[0])
+    print("[C2] Collection header:", coll_vals[0])
+    print("[C2] header_keys      :", [header_key(x) for x in coll_vals[0]])
+    print("[C2] colmap            :", colmap)
     create_i       = colmap["create"]       if colmap["create"]      >= 0 else 0
     variation_i    = colmap["variation"]    if colmap["variation"]   >= 0 else 1
     sku_i          = colmap["sku"]          if colmap["sku"]         >= 0 else 2
