@@ -1,5 +1,7 @@
 # item_creator/creation_steps.py
 # -*- coding: utf-8 -*-
+print("[DEBUG] creation_steps loaded from:", __file__)
+
 from __future__ import annotations
 
 from typing import List, Dict, Optional, Any
@@ -194,6 +196,10 @@ def run_step_C2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
         pname     = (row[pname_i] if pname_i < len(row) else "").strip()
         desc      = (row[desc_i] if desc_i < len(row) else "").strip()
         category  = (row[category_i] if category_i < len(row) else "").strip()
+
+        # DEBUG: 첫 데이터 행의 Product Name 인덱스와 값 확인
+        if r == 1:
+            print(f"[C2 DEBUG] pname_i={pname_i}, pname(column)={pname!r}, row={row}")
 
         if not category:
             pid = variation or sku or f"ROW{r+1}"
