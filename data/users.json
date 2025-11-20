@@ -19,5 +19,12 @@
     "copy_image_host": "https://shopeept.com/",
     "create_sheet_id": "1O2j4i0mpxM5wjAGlhFnX6y_VjRV7-z3ypZ6sW7LY_t4",
     "create_image_host": "https://shopeept.com/"
+  },
+  "admin": {
+    "display_name": "admin",
+    "copy_sheet_id":   "1JaX_63lX2pestej-aruSCY4E37-4YUMN-uTFPsWgLO8",
+    "copy_image_host": "https://unisiashop.com/",
+    "create_sheet_id": "16y5YnUE57gERWvb1T7DLD9J-B5u-BpfnxwaceRBmIvA",
+    "create_image_host": "https://unisiashop.com/"
   }
 }
