@@ -1015,10 +1015,20 @@ def run_step_C7_mandatory_defaults(sh, ref):
 # -------------------------------------------------------------------
 # Export helpers (xlsx / csv)
 # -------------------------------------------------------------------
-def export_tem_xlsx(sh: gspread.Spreadsheet) -> Optional[BytesIO]:
+# -------------------------------------------------------------------
+# Export helpers (xlsx / csv)
+# -------------------------------------------------------------------
+from typing import Optional
+from io import BytesIO
+import re
+import pandas as pd
+
+
+def export_tem_xlsx(sh: gspread.Spreadsheet) -> Optional[bytes]:
     """
     TEM_OUTPUT 시트를 TopLevel Category 단위로 분할하여 Excel(xlsx) 파일 반환.
     - A열 PID 제거, Category 형식 정규화 포함.
+    - 🔑 반환 타입: bytes (Streamlit download_button에 바로 전달용)
     """
     if not sh:
         return None
@@ -1035,7 +1045,8 @@ def export_tem_xlsx(sh: gspread.Spreadsheet) -> Optional[BytesIO]:
     df = pd.DataFrame(all_data)
     for c in df.columns:
         df[c] = df[c].astype(str)
-    
+
+    # B열이 "category" 인 행 = 헤더 행
     header_mask = df.iloc[:, 1].str.lower().eq("category")
     header_indices = df.index[header_mask].tolist()
     if not header_indices:
@@ -1044,6 +1055,7 @@ def export_tem_xlsx(sh: gspread.Spreadsheet) -> Optional[BytesIO]:
 
     output = BytesIO()
 
+    # 엑셀 엔진 선택
     try:
         import xlsxwriter  # noqa: F401
         engine = "xlsxwriter"
@@ -1055,6 +1067,7 @@ def export_tem_xlsx(sh: gspread.Spreadsheet) -> Optional[BytesIO]:
             print("[!] xlsx 생성용 라이브러리(xlsxwriter/openpyxl)가 없습니다.")
             return None
 
+    # TopLevel Category 단위로 시트 분리
     with pd.ExcelWriter(output, engine=engine) as writer:
         for i, header_index in enumerate(header_indices):
             start_row = header_index + 1
@@ -1067,7 +1080,11 @@ def export_tem_xlsx(sh: gspread.Spreadsheet) -> Optional[BytesIO]:
 
             # Category 표준화
             if not chunk_df.empty and chunk_df.shape[1] > 0 and header_key(header_row.iloc[0]) == "category":
-                chunk_df.iloc[:, 0] = chunk_df.iloc[:, 0].astype(str).str.replace(r"\s*-\s*", "-", regex=True)
+                chunk_df.iloc[:, 0] = (
+                    chunk_df.iloc[:, 0]
+                    .astype(str)
+                    .str.replace(r"\s*-\s*", "-", regex=True)
+                )
 
             columns = header_row.astype(str).tolist()
             if len(columns) != chunk_df.shape[1]:
@@ -1084,49 +1101,12 @@ def export_tem_xlsx(sh: gspread.Spreadsheet) -> Optional[BytesIO]:
 
             chunk_df.to_excel(writer, sheet_name=sheet_name, index=False)
 
+    # 🔑 여기서 BytesIO → bytes 로 변환해서 리턴
     output.seek(0)
-    print("Final template file generated successfully (xlsx).")
-    return output
+    data = output.getvalue()
+    print(f"Final template file generated successfully (xlsx). size={len(data)} bytes")
+    return data
 
-def export_tem_csv(sh: gspread.Spreadsheet) -> Optional[bytes]:
-    """
-    TEM_OUTPUT 시트를 CSV(bytes)로 반환.
-    - A열 PID 제거 및 Category 정규화 포함.
-    """
-    if not sh:
-        return None
-    try:
-        ws = safe_worksheet(sh, "TEM_OUTPUT")
-        vals = with_retry(lambda: ws.get_all_values()) or []
-        if not vals:
-            return None
-
-        processed_vals = []
-        current_headers = None
-        for row in vals:
-            if (row[1] if len(row) > 1 else "").strip().lower() == "category":
-                current_headers = row[1:]
-                processed_vals.append(current_headers)
-                continue
-            
-            if current_headers and len(row) > 1:
-                data_row = row[1:]
-                if len(data_row) > 0 and header_key(current_headers[0]) == "category":
-                    data_row[0] = re.sub(r"\s*-\s*", "-", data_row[0])
-                processed_vals.append(data_row)
-            elif len(row) > 0:
-                processed_vals.append(row[1:])
-
-        if not processed_vals:
-            return None
-            
-        buf = io.StringIO()
-        writer = csv.writer(buf)
-        writer.writerows(processed_vals)
-        return buf.getvalue().encode("utf-8-sig")
-    except Exception as e:
-        print(f"[WARN] TEM_OUTPUT CSV 변환 실패: {e}")
-        return None
 
 # -------------------------------------------------------------------
 # 호환용 별칭 (기존 호출부가 기대하는 이름 유지)
