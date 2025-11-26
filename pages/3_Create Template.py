@@ -142,7 +142,7 @@ if run_clicked:
     st.session_state["SHOP_CODE"] = shop_code
 
     # Creator: get_env 사용 → secrets 없어도 crash X
-    ctrl = ShopeeCreator(get_env)
+    ctrl = ShopeeCreator(st.secrets)
 
     if host:
         try:
