@@ -32,9 +32,14 @@ _PROFILES_CACHE: Optional[Dict[str, Dict[str, Any]]] = None
 # Paths: Always app root/data/users.json
 # ─────────────────────────────────────────────
 def _profiles_path() -> Path:
-    """Force profile file location: <app_root>/data/users.json"""
-    root = Path(__file__).resolve().parents[1]  # shopee_dev / shopee_v1
-    return root / "data" / "users.json"
+    """
+    user_manager.py 파일이 있는 폴더 기준으로
+    ./data/users.json 을 바라보도록 설정
+    (레포 구조: Home.py, user_manager.py, data/ 가 같은 레벨)
+    """
+    root = Path(__file__).resolve().parent  # /mount/src/shopee
+    return root / "data" / "users.json"     # /mount/src/shopee/data/users.json
+
 
 
 # ─────────────────────────────────────────────
