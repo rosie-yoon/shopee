@@ -1,4 +1,4 @@
-# Home.py (v6 UI clean: cards box + Google blue button + PNG icons)
+# Home.py (Stable Clean Version v7)
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
@@ -12,84 +12,58 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# Auth/session helpers
-SESSION_USER_KEY = "user"
-SESSION_AUTH_KEY = "is_logged_in"
+# ──────────────────────────────────────────────
+# Import user/session manager
+# ──────────────────────────────────────────────
+from user_manager import (
+    ensure_login_persistence,
+    is_logged_in,
+    get_current_user,
+    login,
+    logout,
+)
 
-def is_logged_in() -> bool:
-    return bool(st.session_state.get(SESSION_AUTH_KEY)) and bool(st.session_state.get(SESSION_USER_KEY))
+# 최초 세션 초기화 + query sync
+ensure_login_persistence()
 
-def current_user() -> str:
-    return st.session_state.get(SESSION_USER_KEY, "") or ""
-
-def pin_user_query(username: str) -> bool:
-    if not username:
-        return False
-    qp = dict(st.query_params)
-    if qp.get("user") == username:
-        return False
-    qp["user"] = username
-    st.query_params = qp
-    return True
-
-def do_login(username: str) -> None:
-    username = (username or "").strip()
-    if not username:
-        return
-    st.session_state[SESSION_USER_KEY] = username
-    st.session_state[SESSION_AUTH_KEY] = True
-    if pin_user_query(username):
-        st.rerun()
-
-def do_logout(clear_nav: bool = True) -> None:
-    st.session_state.pop(SESSION_USER_KEY, None)
-    st.session_state.pop(SESSION_AUTH_KEY, None)
-    qp = dict(st.query_params)
-    qp.pop("user", None)
-    if clear_nav:
-        qp.pop("nav", None)
-    st.query_params = qp
-    st.rerun()
-
-# 딥링크 복구
-qp_user = st.query_params.get("user")
-if qp_user and not is_logged_in():
-    st.session_state[SESSION_USER_KEY] = qp_user
-    st.session_state[SESSION_AUTH_KEY] = True
-
-# Header
-left, right = st.columns([1, 1])
-with left:
-    st.title("Shopee Support Tools")
+# ──────────────────────────────────────────────
+# UI Header
+# ──────────────────────────────────────────────
+st.title("Shopee Support Tools")
 st.caption("운영/지원 자동화를 위한 툴킷")
 st.divider()
 
-# Login panel (로그인 전엔 카드 미노출)
+# ──────────────────────────────────────────────
+# 로그인 UI
+# ──────────────────────────────────────────────
 if not is_logged_in():
     st.info("로그인이 필요합니다. 사용자명을 입력해 로그인해 주세요.")
     with st.form("login_form"):
-        username = st.text_input("사용자명", value=qp_user or "", placeholder="ex) yeojin")
+        username = st.text_input("사용자명", value="", placeholder="ex) yeojin")
         ok = st.form_submit_button("로그인", use_container_width=True)
     if ok:
         if not username.strip():
             st.error("사용자명을 입력해 주세요.")
         else:
-            do_login(username.strip())
-            st.stop()
+            login(username.strip(), pin_query=True, rerun=True)
     st.stop()
 
-# 로그인 정보 및 로그아웃
-u = current_user()
+# ──────────────────────────────────────────────
+# 로그인 정보 + 로그아웃
+# ──────────────────────────────────────────────
+u = get_current_user()
 c1, c2 = st.columns([3, 1])
 with c1:
     st.success(f"✅ 로그인됨: **{u}**")
 with c2:
     if st.button("로그아웃", use_container_width=True):
-        do_logout()
+        logout(clear_query=True, rerun=True)
 
 st.divider()
 
-# Style: 구글 블루 버튼 + 간단 텍스트 여백
+# ──────────────────────────────────────────────
+# 스타일 (Google Blue Buttons)
+# ──────────────────────────────────────────────
 st.markdown(
     """
     <style>
@@ -108,7 +82,9 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Cards (네이티브 컨테이너 border=True)
+# ──────────────────────────────────────────────
+# Cards
+# ──────────────────────────────────────────────
 ICON_DIR = Path(__file__).resolve().parent / "assets" / "icons"
 
 def _icon_path(name: str) -> str:
@@ -137,4 +113,4 @@ _card(c2, "Copy Template",  "3종 템플릿 복사/업로드",       "copy",   "
 _card(c3, "Create Template","템플릿 생성/전처리/내보내기", "create", "pages/3_Create Template.py","btn_create")
 
 st.divider()
-st.caption("Version: v4.2")
+st.caption("Version: v4.3")
