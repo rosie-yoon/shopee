@@ -11,7 +11,7 @@ from io import BytesIO
 import gspread
 from gspread.cell import Cell
 from gspread.utils import rowcol_to_a1
-from gspread.exceptions import WorksheetNotFound
+from gspread.exceptions import WorksheetNotFound, APIError
 import pandas as pd
 
 from .utils_creator import (
@@ -1015,9 +1015,6 @@ def run_step_C7_mandatory_defaults(sh, ref):
 # -------------------------------------------------------------------
 # Export helpers (xlsx / csv)
 # -------------------------------------------------------------------
-# -------------------------------------------------------------------
-# Export helpers (xlsx / csv)
-# -------------------------------------------------------------------
 from typing import Optional
 from io import BytesIO
 import re
@@ -1028,18 +1025,48 @@ def export_tem_xlsx(sh: gspread.Spreadsheet) -> Optional[bytes]:
     """
     TEM_OUTPUT 시트를 TopLevel Category 단위로 분할하여 Excel(xlsx) 파일 반환.
     - A열 PID 제거, Category 형식 정규화 포함.
-    - 🔑 반환 타입: bytes (Streamlit download_button에 바로 전달용)
+    - 반환 타입: bytes (Streamlit download_button에 바로 전달용)
+    - Google Sheets 쿼터 초과(RATE_LIMIT_EXCEEDED/RESOURCE_EXHAUSTED) 시 None 반환.
     """
     if not sh:
         return None
+
     tem_name = get_tem_sheet_name()
     try:
         tem_ws = safe_worksheet(sh, tem_name)
     except WorksheetNotFound:
+        print(f"[EXPORT][WARN] TEM_OUTPUT('{tem_name}') 시트를 찾을 수 없습니다.")
         return None
 
-    all_data = with_retry(lambda: tem_ws.get_all_values())
+    # 🔐 쿼터(RATE LIMIT) 방어: get_all_values() 호출 부분 래핑
+    try:
+        all_data = with_retry(lambda: tem_ws.get_all_values())
+    except APIError as e:
+        msg = str(e)
+        # gspread.APIError → Google API 에러 래핑
+        if (
+            "RATE_LIMIT_EXCEEDED" in msg
+            or "RESOURCE_EXHAUSTED" in msg
+            or "ReadRequestsPerMinutePerUser" in msg
+        ):
+            print("[EXPORT][WARN] Google Sheets read quota exceeded while building xlsx. Try again in 1~2 minutes.")
+            return None
+        # 그 외 API 에러는 그대로 올림(디버깅용)
+        raise
+    except Exception as e:
+        msg = str(e)
+        # 혹시 다른 형태로 올라오는 쿼터 에러도 한 번 더 방어
+        if (
+            "RATE_LIMIT_EXCEEDED" in msg
+            or "RESOURCE_EXHAUSTED" in msg
+            or "ReadRequestsPerMinutePerUser" in msg
+        ):
+            print("[EXPORT][WARN] Google Sheets read quota exceeded while building xlsx. Try again in 1~2 minutes.")
+            return None
+        raise
+
     if not all_data:
+        print("[EXPORT][WARN] TEM_OUTPUT 시트가 비어 있습니다.")
         return None
 
     df = pd.DataFrame(all_data)
@@ -1047,10 +1074,15 @@ def export_tem_xlsx(sh: gspread.Spreadsheet) -> Optional[bytes]:
         df[c] = df[c].astype(str)
 
     # B열이 "category" 인 행 = 헤더 행
-    header_mask = df.iloc[:, 1].str.lower().eq("category")
+    try:
+        header_mask = df.iloc[:, 1].str.lower().eq("category")
+    except Exception as e:
+        print(f"[EXPORT][WARN] TEM_OUTPUT 헤더 판별 중 오류: {e}")
+        return None
+
     header_indices = df.index[header_mask].tolist()
     if not header_indices:
-        print("[!] TEM_OUTPUT 헤더 행(Category)을 찾을 수 없습니다.")
+        print("[EXPORT][WARN] TEM_OUTPUT 헤더 행(Category)을 찾을 수 없습니다.")
         return None
 
     output = BytesIO()
@@ -1064,7 +1096,7 @@ def export_tem_xlsx(sh: gspread.Spreadsheet) -> Optional[bytes]:
             import openpyxl  # noqa: F401
             engine = "openpyxl"
         except ImportError:
-            print("[!] xlsx 생성용 라이브러리(xlsxwriter/openpyxl)가 없습니다.")
+            print("[EXPORT][WARN] xlsx 생성용 라이브러리(xlsxwriter/openpyxl)가 없습니다.")
             return None
 
     # TopLevel Category 단위로 시트 분리
@@ -1079,7 +1111,11 @@ def export_tem_xlsx(sh: gspread.Spreadsheet) -> Optional[bytes]:
             chunk_df = df.iloc[start_row:end_row, 1:].copy()
 
             # Category 표준화
-            if not chunk_df.empty and chunk_df.shape[1] > 0 and header_key(header_row.iloc[0]) == "category":
+            if (
+                not chunk_df.empty
+                and chunk_df.shape[1] > 0
+                and header_key(header_row.iloc[0]) == "category"
+            ):
                 chunk_df.iloc[:, 0] = (
                     chunk_df.iloc[:, 0]
                     .astype(str)
@@ -1094,17 +1130,25 @@ def export_tem_xlsx(sh: gspread.Spreadsheet) -> Optional[bytes]:
                     columns = columns[: chunk_df.shape[1]]
             chunk_df.columns = columns
 
-            cat_col_name = next((c for c in columns if c.lower() == "category"), None)
-            first_cat = str(chunk_df.iloc[0][cat_col_name]) if (cat_col_name and not chunk_df.empty) else "UNKNOWN"
+            cat_col_name = next(
+                (c for c in columns if c.lower() == "category"), None
+            )
+            first_cat = (
+                str(chunk_df.iloc[0][cat_col_name])
+                if (cat_col_name and not chunk_df.empty)
+                else "UNKNOWN"
+            )
             top_level_name = top_of_category(first_cat) or "UNKNOWN"
-            sheet_name = re.sub(r"[\s/\\*?:\\[\\]]", "_", str(top_level_name).title())[:31]
+            sheet_name = re.sub(
+                r"[\s/\\*?:\[\]]", "_", str(top_level_name).title()
+            )[:31]
 
             chunk_df.to_excel(writer, sheet_name=sheet_name, index=False)
 
-    # 🔑 여기서 BytesIO → bytes 로 변환해서 리턴
+    # BytesIO → bytes 로 변환해서 리턴
     output.seek(0)
     data = output.getvalue()
-    print(f"Final template file generated successfully (xlsx). size={len(data)} bytes")
+    print(f"[EXPORT] Final template file generated successfully (xlsx). size={len(data)} bytes")
     return data
 
 

@@ -228,21 +228,29 @@ try:
     # export_tem_xlsx() 결과를 확실히 바이트로 변환
     out = st.session_state.get("DL_XLSX")
     if not out:
-        # 필요 시 다시 시도 (export_tem_xlsx는 BytesIO 예상)
         from shopee_creator.creation_steps import export_tem_xlsx
+
         ctrl = ShopeeCreator(st.secrets)
         gs = ctrl.gs
         sid = st.session_state.get("SOURCE_SPREADSHEET_ID")
         sh = gs.open_by_key(sid)
-        xio = export_tem_xlsx(sh)
-        if hasattr(xio, "getvalue"):
-            out = xio.getvalue()
-        elif hasattr(xio, "getbuffer"):
-            out = xio.getbuffer().tobytes()
-        elif isinstance(xio, bytes):
-            out = xio
+
+        # export_tem_xlsx → 이제 bytes 또는 None 반환
+        out = export_tem_xlsx(sh)
+
+        if out:
+            st.download_button(
+                label="템플릿 다운로드 (xlsx)",
+                data=out,
+                file_name="Shopee_Create_Template.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
         else:
-            out = None
+            st.warning(
+                "Google Sheets 읽기 요청이 너무 많아 쿼터 제한(RATE LIMIT)에 걸렸어요.\n"
+                "1~2분 후에 다시 시도해 주세요!"
+            )
+
     # 엑셀 매직 헤더 확인 (PK 시작)
     if isinstance(out, (bytes, bytearray)) and out[:2] == b"PK":
         st.download_button(
