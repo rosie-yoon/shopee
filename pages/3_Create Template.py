@@ -60,18 +60,27 @@ render_profile_sidebar(
 # Resolve Sheet ID & Host from Session / Profile / Secret
 # ──────────────────────────────────────────────
 def resolve_create_sid() -> str:
+    # 1) 세션
     sid = (st.session_state.get("SOURCE_SPREADSHEET_ID") or "").strip()
-    if not sid:
-        raw = get_user_pref("create_sheet_id") or get_user_pref("sheet_id")
-        sid = extract_sheet_id(str(raw)) if raw else ""
-    if not sid:
-        raw = (
-            st.secrets.get("SOURCE_SPREADSHEET_ID")
-            or st.secrets.get("GOOGLE_SHEETS_SPREADSHEET_ID")
-            or st.secrets.get("GOOGLE_SHEET_KEY")
-        )
-        sid = extract_sheet_id(str(raw)) if raw else ""
+    if sid:
+        return sid
+
+    # 2) 사용자 프로필
+    raw = get_user_pref("create_sheet_id") or get_user_pref("sheet_id")
+    if raw:
+        sid = extract_sheet_id(str(raw))
+        if sid:
+            return sid
+
+    # 3) 환경/Secrets 안전 접근 (FileNotFoundError 없음)
+    raw = (
+        get_env("SOURCE_SPREADSHEET_ID")
+        or get_env("GOOGLE_SHEETS_SPREADSHEET_ID")
+        or get_env("GOOGLE_SHEET_KEY")
+    )
+    sid = extract_sheet_id(str(raw)) if raw else ""
     return sid or ""
+
 
 def resolve_create_host() -> str:
     return (
@@ -135,10 +144,12 @@ if run_clicked:
         st.stop()
 
     ref_id_or_url = (
-        st.secrets.get("REFERENCE_SPREADSHEET_ID")
-        or st.secrets.get("REFERENCE_SPREADSHEET_URL")
-        or ""
+            get_user_pref("reference_sheet_id")
+            or get_env("REFERENCE_SPREADSHEET_ID")
+            or get_env("REFERENCE_SHEET_KEY")
+            or ""
     )
+
     try:
         rid = extract_sheet_id(str(ref_id_or_url))
         ref = gs.open_by_key(rid)
@@ -230,7 +241,11 @@ try:
     if not out:
         from shopee_creator.creation_steps import export_tem_xlsx
 
-        ctrl = ShopeeCreator(st.secrets)
+        ctrl = ShopeeCreator({
+            "GCP": get_env("GOOGLE_SHEETS_SPREADSHEET_ID"),
+            "REF": get_env("REFERENCE_SPREADSHEET_ID"),
+            "IMAGE": get_env("IMAGE_HOSTING_URL"),
+        })
         gs = ctrl.gs
         sid = st.session_state.get("SOURCE_SPREADSHEET_ID")
         sh = gs.open_by_key(sid)
