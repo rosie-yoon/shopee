@@ -14,7 +14,8 @@ ENV/
 
 # Local data / outputs
 logs/
-data/
+data/*
+!data/users.json
 *.xlsx
 token.json
 client_secret.json
