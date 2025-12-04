@@ -33,5 +33,12 @@
     "copy_image_host": "https://unisiashop.com/",
     "create_sheet_id": "1NXA0FpeDlsudbhmIFrcR7ich5pIJXNLMrmrz5TiJ2mU",
     "create_image_host": "https://unisiashop.com/"
+  },
+  "뚜샵": {
+    "display_name": "뚜샵",
+    "copy_sheet_id":   "1Y3TTPfGE7n7WaGy8dqVRjFbEp2C9wE1jiU_3iTM5rcE",
+    "copy_image_host": "https://cdn.ddushop.com/",
+    "create_sheet_id": "1Y3TTPfGE7n7WaGy8dqVRjFbEp2C9wE1jiU_3iTM5rcE",
+    "create_image_host": "https://cdn.ddushop.com/"
   }
 }

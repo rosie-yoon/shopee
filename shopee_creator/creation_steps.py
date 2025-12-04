@@ -375,7 +375,7 @@ def run_step_C4_prices(sh: gspread.Spreadsheet) -> None:
             hdr = [header_key(x) for x in mg_vals[0]]
             ix_sku  = _find_col_index(hdr, "sku", ["seller_sku", "item sku"])
             # '소비자가' 우선, 다양한 영어 표기 보조
-            ix_cpr  = _find_col_index(hdr, "소비자가", ["consumer price", "global sku price", "price"])
+            ix_cpr  = _find_col_index(hdr, "판매가", ["consumer price", "global sku price", "price"])
             if ix_sku != -1 and ix_cpr != -1:
                 for r in range(1, len(mg_vals)):
                     row = mg_vals[r]
