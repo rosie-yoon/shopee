@@ -37,8 +37,8 @@
   "뚜샵": {
     "display_name": "뚜샵",
     "copy_sheet_id":   "1Y3TTPfGE7n7WaGy8dqVRjFbEp2C9wE1jiU_3iTM5rcE",
-    "copy_image_host": "https://cdn.ddushop.com/",
+    "copy_image_host": "https://storage.googleapis.com/pjb/",
     "create_sheet_id": "1Y3TTPfGE7n7WaGy8dqVRjFbEp2C9wE1jiU_3iTM5rcE",
-    "create_image_host": "https://cdn.ddushop.com/"
+    "create_image_host": "https://storage.googleapis.com/pjb/"
   }
 }
