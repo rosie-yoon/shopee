@@ -52,7 +52,6 @@ def st_image_center(img, width=None, caption=None):
 # 메인 앱
 # ===============================
 def run():
-    st.set_page_config(layout="wide")
     st.title("Cover Image Generator")
 
     # ---------------------------
