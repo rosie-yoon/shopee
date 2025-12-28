@@ -6,6 +6,7 @@ import zipfile
 
 import streamlit as st
 from PIL import Image as PILImage
+from PIL import ImageFilter
 
 from image_compose.composer_utils import (
     compose_one_bytes,
@@ -16,22 +17,29 @@ from image_compose.composer_utils import (
 
 
 # ======================================================
-# 출력 전용 업스케일 (LANCZOS, Python 3.13 안정)
+# 1080 고정 화질 개선 (사이즈 변경 ❌)
 # ======================================================
-def upscale_output_image(img: PILImage.Image, scale: int = 2) -> PILImage.Image:
-    if scale <= 1:
-        return img
-    w, h = img.size
-    return img.resize((w * scale, h * scale), PILImage.LANCZOS)
+def enhance_1080_quality(img: PILImage.Image) -> PILImage.Image:
+    """
+    - 이미지 사이즈 유지
+    - 글자/로고 안전한 선명도 보정
+    """
+    return img.filter(
+        ImageFilter.UnsharpMask(
+            radius=1.2,   # 엣지 반경 (작게)
+            percent=110,  # 강도 (보수적)
+            threshold=3,  # 노이즈 억제
+        )
+    )
 
 
 # ======================================================
 # Streamlit 이미지 중앙 렌더
 # ======================================================
-def _st_image(img, width=None, caption=None):
+def _st_image(img, width=None):
     _, mid, _ = st.columns([1, 4, 1])
     with mid:
-        st.image(img, width=width, caption=caption)
+        st.image(img, width=width)
 
 
 # ======================================================
@@ -58,8 +66,7 @@ def run():
             "zip_sig": None,
             "zip_buf": None,
             "zip_count": 0,
-            "enable_upscale": False,
-            "upscale_scale": 2,
+            "enable_enhance": False,
         }
         for k, v in defaults.items():
             st.session_state.setdefault(k, v)
@@ -87,8 +94,7 @@ def run():
             ss.resize_ratio,
             ss.shadow_preset,
             ss.allow_non_alpha_overlay,
-            ss.enable_upscale,
-            ss.upscale_scale,
+            ss.enable_enhance,
         )
 
     # ------------------------------
@@ -164,8 +170,9 @@ def run():
                     buf, _ = result
                     img = PILImage.open(io.BytesIO(buf.getvalue()))
 
-                    if ss.enable_upscale and ss.upscale_scale > 1:
-                        img = upscale_output_image(img, ss.upscale_scale)
+                    # 🔥 1080 화질 개선 (사이즈 변경 없음)
+                    if ss.enable_enhance:
+                        img = enhance_1080_quality(img)
 
                     out_buf = io.BytesIO()
                     img.save(out_buf, format="PNG")
@@ -202,7 +209,7 @@ def run():
         if st.button("아이템 삭제", use_container_width=True):
             ss.item_key += 1
             ss.preview_sig = None
-            st.rerun()  # 🔥 1번 클릭 즉시 반영
+            st.rerun()
 
         tpl_files = st.file_uploader(
             "2. Template 이미지 업로드",
@@ -231,11 +238,10 @@ def run():
         )
 
         ratios = [1.3, 1.2, 1.1, 1.0, 0.9, 0.8, 0.7]
-        idx = ratios.index(ss.resize_ratio) if ss.resize_ratio in ratios else ratios.index(1.0)
         ss.resize_ratio = c2.selectbox(
             "리사이즈",
             ratios,
-            index=idx,
+            index=ratios.index(ss.resize_ratio),
             format_func=lambda x: f"{int(x*100)}%",
         )
 
@@ -245,10 +251,8 @@ def run():
         else:
             c3.selectbox("그림자", SHADOW_PRESETS.keys(), key="shadow_preset")
 
-        st.markdown("#### 저장 결과 해상도")
-        u1, u2 = st.columns(2)
-        u1.checkbox("2x 고해상도 출력", key="enable_upscale")
-        u2.selectbox("배율", [1, 2], key="upscale_scale")
+        st.markdown("#### 저장 화질 옵션")
+        st.checkbox("1080 화질 개선 (선명도 보정)", key="enable_enhance")
 
         # -------- 미리보기 --------
         st.subheader("미리보기")
@@ -274,10 +278,8 @@ def run():
                 if st.button("▶"):
                     ss.preview_idx = (ss.preview_idx + 1) % n
 
-            img_bytes = ss.preview_list[ss.preview_idx]
-            img = PILImage.open(io.BytesIO(img_bytes))
-            w = int(img.width * PREVIEW_SCALE)
-            _st_image(img, width=w)
+            img = PILImage.open(io.BytesIO(ss.preview_list[ss.preview_idx]))
+            _st_image(img, width=int(img.width * PREVIEW_SCALE))
         else:
             st.caption("파일을 업로드하면 미리보기가 표시됩니다.")
 
