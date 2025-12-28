@@ -14,18 +14,11 @@ from image_compose.composer_utils import (
     ensure_rgba,
 )
 
-BASE_DIR = Path(__file__).resolve().parent
-
 
 # ======================================================
 # 출력 전용 업스케일 (LANCZOS, Python 3.13 안정)
 # ======================================================
 def upscale_output_image(img: PILImage.Image, scale: int = 2) -> PILImage.Image:
-    """
-    고품질 리사이즈 (AI 아님)
-    - 글자/로고 보존 최우선
-    - 저장 시에만 사용
-    """
     if scale <= 1:
         return img
     w, h = img.size
@@ -36,22 +29,9 @@ def upscale_output_image(img: PILImage.Image, scale: int = 2) -> PILImage.Image:
 # Streamlit 이미지 중앙 렌더
 # ======================================================
 def _st_image(img, width=None, caption=None):
-    c = st.container()
-    _, mid, _ = c.columns([1, 4, 1])
+    _, mid, _ = st.columns([1, 4, 1])
     with mid:
         st.image(img, width=width, caption=caption)
-
-
-def _to_image(x):
-    if x is None:
-        return None
-    if isinstance(x, (bytes, bytearray)):
-        return x
-    if isinstance(x, PILImage.Image):
-        return x
-    if hasattr(x, "getvalue"):
-        return x.getvalue()
-    return None
 
 
 # ======================================================
@@ -88,7 +68,7 @@ def run():
     ss = st.session_state
 
     # ------------------------------
-    # 시그니처
+    # 유틸
     # ------------------------------
     def _files_sig(files):
         if not files:
@@ -181,10 +161,9 @@ def run():
                     if not result:
                         continue
 
-                    buf, ext = result
+                    buf, _ = result
                     img = PILImage.open(io.BytesIO(buf.getvalue()))
 
-                    # 🔥 출력 전용 업스케일
                     if ss.enable_upscale and ss.upscale_scale > 1:
                         img = upscale_output_image(img, ss.upscale_scale)
 
@@ -220,16 +199,10 @@ def run():
             key=f"item_{ss.item_key}",
         )
 
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("아이템 삭제", use_container_width=True):
-                ss.item_key += 1
-                ss.preview_sig = None
-        with c2:
-            if st.button("전체 삭제", use_container_width=True):
-                ss.item_key += 1
-                ss.tpl_key += 1
-                ss.preview_sig = None
+        if st.button("아이템 삭제", use_container_width=True):
+            ss.item_key += 1
+            ss.preview_sig = None
+            st.rerun()  # 🔥 1번 클릭 즉시 반영
 
         tpl_files = st.file_uploader(
             "2. Template 이미지 업로드",
@@ -241,6 +214,7 @@ def run():
         if st.button("템플릿 삭제", use_container_width=True):
             ss.tpl_key += 1
             ss.preview_sig = None
+            st.rerun()
 
     # ---------------- RIGHT ----------------
     with right:
@@ -308,31 +282,41 @@ def run():
             st.caption("파일을 업로드하면 미리보기가 표시됩니다.")
 
         # -------- 저장 --------
-        if st.button("이미지 생성", type="primary", use_container_width=True, disabled=not (item_files and tpl_files)):
-            with st.dialog("출력 설정"):
-                shop = st.text_input("Shop 구분값 (선택)")
-                zip_sig = (
-                    tuple(_files_sig(item_files)),
-                    tuple(_files_sig(tpl_files)),
-                    _options_sig(),
-                    shop,
-                )
-                if zip_sig != ss.zip_sig:
-                    with st.spinner("이미지 생성 중..."):
-                        ss.zip_buf, ss.zip_count = build_zip(item_files, tpl_files, shop)
-                        ss.zip_sig = zip_sig
+        @st.dialog("출력 설정")
+        def show_save_dialog(item_files, tpl_files):
+            shop = st.text_input("Shop 구분값 (선택)")
 
-                if ss.zip_count == 0:
-                    st.warning("생성된 이미지가 없습니다.")
-                else:
-                    st.success(f"{ss.zip_count}개 이미지 준비 완료")
-                    st.download_button(
-                        "ZIP 다운로드",
-                        ss.zip_buf,
-                        file_name="Thumb_Craft_Results.zip",
-                        mime="application/zip",
-                        use_container_width=True,
-                    )
+            zip_sig = (
+                tuple(_files_sig(item_files)),
+                tuple(_files_sig(tpl_files)),
+                _options_sig(),
+                shop,
+            )
+
+            if zip_sig != ss.zip_sig:
+                with st.spinner("이미지 생성 중..."):
+                    ss.zip_buf, ss.zip_count = build_zip(item_files, tpl_files, shop)
+                    ss.zip_sig = zip_sig
+
+            if ss.zip_count == 0:
+                st.warning("생성된 이미지가 없습니다.")
+            else:
+                st.success(f"{ss.zip_count}개 이미지 준비 완료")
+                st.download_button(
+                    "ZIP 다운로드",
+                    ss.zip_buf,
+                    file_name="Thumb_Craft_Results.zip",
+                    mime="application/zip",
+                    use_container_width=True,
+                )
+
+        if st.button(
+            "이미지 생성",
+            type="primary",
+            use_container_width=True,
+            disabled=not (item_files and tpl_files),
+        ):
+            show_save_dialog(item_files, tpl_files)
 
 
 if __name__ == "__main__":
