@@ -47,5 +47,12 @@
     "copy_image_host": "https://storage.googleapis.com/wonderjoy/",
     "create_sheet_id": "1IzzBPnhKo_inx61ESbuwDFmiReiUIMjnqdI2Vn96zPQ",
     "create_image_host": "https://storage.googleapis.com/wonderjoy/"
+  },
+  "하우스": {
+    "display_name": "하우스",
+    "copy_sheet_id":   "1tqobV7weMQdfubqaQzanGQL_b7OfNiga6nOfHdqv9xQ",
+    "copy_image_host": "https://storage.googleapis.com/ourstore056/",
+    "create_sheet_id": "1nufbHlQvDQgNp4WZ6vVKxd2AFQPkFboppYWjhiP_M9I",
+    "create_image_host": "https://storage.googleapis.com/ourstore056/"
   }
 }
