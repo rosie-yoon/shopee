@@ -372,3 +372,30 @@ def safe_sheet_name(category_name: str, max_length: int = 31) -> str:
             return f"{first_part}_{last_parts[:remaining_length]}"
 
     return clean_name[:max_length]
+
+
+# =============================
+# [NEW] 중카테고리 추출 유틸
+# =============================
+
+def mid_of_category(s: str, depth: int = 2) -> str:
+    """
+    카테고리 경로에서 중카테고리(depth=2)까지만 추출
+
+    Examples:
+        >>> mid_of_category("Food & Beverages/Snacks/Chips")
+        "Food & Beverages/Snacks"
+        >>> mid_of_category("Health/Personal Care")
+        "Health/Personal Care"
+        >>> mid_of_category("Home & Living")  # 단일 레벨은 그대로
+        "Home & Living"
+    """
+    if not s or not isinstance(s, str):
+        return ""
+
+    parts = [p.strip() for p in s.strip().split("/") if p.strip()]
+
+    if len(parts) <= depth:
+        return "/".join(parts)
+
+    return "/".join(parts[:depth])

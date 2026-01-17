@@ -27,7 +27,8 @@ import pandas as pd
 from .utils_creator import (
     header_key, top_of_category, get_tem_sheet_name,
     with_retry, safe_worksheet, get_env,
-    forward_fill_by_group, _is_true
+    forward_fill_by_group, _is_true,
+    mid_of_category
 )
 
 
@@ -246,6 +247,9 @@ def run_step_C1(sh: gspread.Spreadsheet, ref: Optional[gspread.Spreadsheet]) -> 
 # -------------------------------------------------------------------
 # C2: Collection → TEM_OUTPUT (중카테고리 기준 전환)
 # -------------------------------------------------------------------
+# -------------------------------------------------------------------
+# C2: Collection → TEM_OUTPUT (중카테고리 기준 전환)
+# -------------------------------------------------------------------
 def run_step_C2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet) -> None:
     print("\n[ Create ] Step C2: Build TEM from Collection (Mid-Category Based)...")
     tem_name = get_tem_sheet_name()
@@ -354,17 +358,17 @@ def run_step_C2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet) -> None:
             headers = template_dict.get(top_norm)
 
             if headers:
-                print(f"   [FALLBACK] Using top-level template for {category}")
+                print(f"   [FALLBACK] Using top-level template for '{category}'")
             else:
                 # 3순위: 기본 템플릿
                 headers = ["Category", "Product Name", "SKU", "Brand", "Stock", "Weight"]
-                print(f"   [DEFAULT] Using default template for {category}")
+                print(f"   [DEFAULT] Template not found for '{mid_cat_raw}'. Using default.")
                 failures.append(["", category, pname, "TEMPLATE_NOT_FOUND", f"mid={mid_cat_raw}"])
                 template_missing_count += 1
                 if mid_cat_raw not in failed_categories_log:
                     failed_categories_log.append(f"'{mid_cat_raw}' (Key: '{mid_norm}')")
 
-        # 템플릿 매핑
+        # 템플릿 매핑 (기존 로직 완전 동일)
         tem_row = [""] * len(headers)
         set_if_exists(headers, tem_row, "category", category)
         set_if_exists(headers, tem_row, "product name", pname)
@@ -750,52 +754,9 @@ def _build_details_count_by_var(collection_values: List[List[str]]) -> Dict[str,
 # -------------------------------------------------------------------
 # C5: Image URL 채우기
 # -------------------------------------------------------------------
-def run_step_C5_images_values(
-        tem_values: List[List[str]],
-        collection_values: List[List[str]],
-        base_url: str,
-        shop_code: str,
-) -> List[List[str]]:
-    """TEM_OUTPUT values를 입력받아 이미지 URL 컬럼을 채워서 반환."""
-    if not tem_values:
-        return tem_values
-
-    base = (base_url or "").rstrip("/") + "/"
-    hdr_row, base_offset, ix_map = _find_header_row_and_offset(tem_values)
-    dmap = _build_details_count_by_var(collection_values)
-
-    out = list(tem_values)
-    for r in range(hdr_row + 1, len(out)):
-        row = out[r]
-        data = row[base_offset:]
-
-        if len(data) > 0 and header_key(data[0]) == "category":
-            continue
-
-        if not data:
-            continue
-
-        var_no = data[ix_map["variation"]].strip() if "variation" in ix_map and ix_map["variation"] < len(data) else ""
-        sku = data[ix_map["sku"]].strip() if "sku" in ix_map and ix_map["sku"] < len(data) else ""
-        dcount = dmap.get(var_no, 0)
-
-        if "cover" in ix_map and ix_map["cover"] < len(data):
-            data[ix_map["cover"]] = f"{base}{var_no}_C_{shop_code}.jpg" if (var_no and shop_code) else ""
-
-        if "ipv" in ix_map and ix_map["ipv"] < len(data):
-            data[ix_map["ipv"]] = f"{base}{sku}.jpg" if sku else ""
-
-        for n in range(1, 9):
-            key = f"item{n}"
-            if key in ix_map and ix_map[key] < len(data):
-                data[ix_map[key]] = f"{base}{var_no}_D{n}.jpg" if (var_no and dcount >= n) else ""
-
-        out[r] = row[:base_offset] + data
-
-    return out
-
-
 def run_step_C5_images(sh: gspread.Spreadsheet, base_url: str, shop_code: str):
+    print("\n[ Create ] Step C5: Fill Image URLs...")
+
     tem_ws = safe_worksheet(sh, get_tem_sheet_name())
     try:
         coll_ws = _find_worksheet_by_alias(
@@ -807,16 +768,41 @@ def run_step_C5_images(sh: gspread.Spreadsheet, base_url: str, shop_code: str):
     tem_values = with_retry(lambda: tem_ws.get_all_values()) or []
     collection_values = with_retry(lambda: coll_ws.get_all_values()) or []
 
-    new_values = run_step_C5_images_values(
-        tem_values=tem_values,
-        collection_values=collection_values,
-        base_url=base_url,
-        shop_code=shop_code,
-    )
+    # ========================================
+    # [핵심] 이미지 컬럼 없으면 안전하게 건너뛰기
+    # ========================================
+    try:
+        new_values = run_step_C5_images_values(
+            tem_values=tem_values,
+            collection_values=collection_values,
+            base_url=base_url,
+            shop_code=shop_code,
+        )
 
-    if new_values != tem_values:
-        end_a1 = rowcol_to_a1(len(new_values), max(len(r) for r in new_values) if new_values else 1)
-        with_retry(lambda: tem_ws.update(values=new_values, range_name=f"A1:{end_a1}"))
+        if new_values != tem_values:
+            end_a1 = rowcol_to_a1(len(new_values), max(len(r) for r in new_values) if new_values else 1)
+            with_retry(lambda: tem_ws.update(values=new_values, range_name=f"A1:{end_a1}"))
+            print("[C5] 이미지 URL 채우기 완료.")
+        else:
+            print("[C5] 변경사항 없음 (이미지 컬럼 없음).")
+
+    except RuntimeError as e:
+        if "TEM_OUTPUT 헤더 행을 찾지 못했습니다" in str(e):
+            print("\n" + "=" * 60)
+            print("[C5] ⚠️  경고: 이미지 컬럼을 찾을 수 없습니다.")
+            print("=" * 60)
+            print("💡 해결방법:")
+            print("   1. Reference 시트의 'TemplateDict' 탭을 여세요")
+            print("   2. 각 중카테고리 행에 다음 컬럼들을 추가하세요:")
+            print("      - Cover Image")
+            print("      - Image per Variation")
+            print("      - Item Image 1 ~ Item Image 8")
+            print("   3. 저장 후 다시 실행하세요")
+            print("=" * 60)
+            print("⏭️  이미지 없이 다음 단계로 진행합니다...\n")
+            return  # 오류 없이 다음 단계로
+        else:
+            raise
 
     print("[C5] Done.")
 
