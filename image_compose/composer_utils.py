@@ -64,15 +64,18 @@ def compute_anchor_position(bg_size, fg_size, anchor: str):
 def compose_one_bytes(item_img: Image.Image, template_img: Image.Image, **opts) -> tuple | None:
     """
     하나의 템플릿에 하나의 아이템 이미지를 합성하여 BytesIO 객체로 반환합니다.
+
+    **자동 합성 모드 결정:**
+    - template_format이 "PNG"면 흰배경 모드 (흰색 배경 → 상품 → 템플릿)
+    - template_format이 "JPEG"면 일반 모드 (템플릿 → 그림자 → 상품)
+
     opts:
       - anchor: str (default "center")
       - resize_ratio: float (default 1.0)
       - shadow_preset: str (default "off")
       - out_format: "JPEG" | "PNG" (default "JPEG")
       - quality: int (default 92)
-      - template_in_front: bool (default False)
-          → True: 흰색 배경 → 상품 → 템플릿 순서 (액자 효과)
-          → False: 템플릿 → 그림자 → 상품 순서 (기존 방식)
+      - template_format: str ("PNG" | "JPEG") - 자동 모드 결정용
     """
     # 0) 입력 이미지 보정
     item_rgba = ensure_rgba(item_img)
@@ -90,26 +93,27 @@ def compose_one_bytes(item_img: Image.Image, template_img: Image.Image, **opts) 
     anchor = opts.get("anchor", "center")
     x, y = compute_anchor_position(template_rgba.size, item_rgba.size, anchor)
 
-    # 3) 합성 방식 분기
-    template_in_front = bool(opts.get("template_in_front", False))
+    # 3) 템플릿 포맷에 따른 자동 모드 결정
+    template_format = str(opts.get("template_format", "JPEG")).upper()
+    use_white_background_mode = (template_format == "PNG")
 
-    if template_in_front:
-        # -------- (B) 템플릿 앞 배치 모드: 흰색 배경 → 상품 → 템플릿 --------
+    if use_white_background_mode:
+        # -------- 흰배경 모드: 흰색 배경 → 상품 → 템플릿 --------
         # 1. 흰색 배경 생성
         final_img = Image.new("RGBA", template_rgba.size, (255, 255, 255, 255))
 
-        # 2. 상품 합성 (투명 배경 포함 정상 처리)
-        base_layer = Image.new("RGBA", final_img.size, (0, 0, 0, 0))
-        base_layer.paste(item_rgba, (x, y), item_rgba)  # 알파 마스크 사용
-        final_img = Image.alpha_composite(final_img, base_layer)
+        # 2. 상품 합성
+        item_layer = Image.new("RGBA", final_img.size, (0, 0, 0, 0))
+        item_layer.paste(item_rgba, (x, y), item_rgba)
+        final_img = Image.alpha_composite(final_img, item_layer)
 
-        # 3. 템플릿 최상단 합성
-        tpl_layer = Image.new("RGBA", final_img.size, (0, 0, 0, 0))
-        tpl_layer.paste(template_rgba, (0, 0), template_rgba)
-        final_img = Image.alpha_composite(final_img, tpl_layer)
+        # 3. 템플릿 최상단 합성 (액자 효과)
+        template_layer = Image.new("RGBA", final_img.size, (0, 0, 0, 0))
+        template_layer.paste(template_rgba, (0, 0), template_rgba)
+        final_img = Image.alpha_composite(final_img, template_layer)
 
     else:
-        # -------- (A) 기본 모드: 템플릿 → 그림자 → 상품 --------
+        # -------- 일반 모드: 템플릿 → 그림자 → 상품 --------
         final_img = template_rgba.copy()
 
         # 4) 그림자 처리
@@ -147,7 +151,6 @@ def compose_one_bytes(item_img: Image.Image, template_img: Image.Image, **opts) 
     out_format = str(opts.get("out_format", "JPEG")).upper()
 
     if out_format == "JPEG":
-        # RGBA를 RGB로 변환 (흰색 배경과 합성)
         if final_img.mode == 'RGBA':
             background = Image.new("RGB", final_img.size, (255, 255, 255))
             background.paste(final_img, mask=final_img.split()[3])
