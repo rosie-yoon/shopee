@@ -131,7 +131,6 @@ def analyze_combinations(item_files, template_files):
 
 def run():
     PREVIEW_SCALE = 0.3
-    st.title("Cover Image")
 
     # ---- 세션 상태 초기화 ----
     def init_state():
@@ -203,7 +202,7 @@ def run():
             "anchor": ss.anchor,
             "resize_ratio": ss.resize_ratio,
             "shadow_preset": shadow_preset,
-            "out_format": "PNG",  # 미리보기는 PNG 고정
+            "out_format": "PNG",
             "composition_mode": composition_mode,
         }
 
@@ -240,7 +239,7 @@ def run():
                 "anchor": ss.anchor,
                 "resize_ratio": ss.resize_ratio,
                 "shadow_preset": shadow_preset,
-                "out_format": "PNG",  # ✅ 수정: fmt 대신 PNG 고정값
+                "out_format": "PNG",
                 "composition_mode": composition_mode,
             }
 
@@ -274,7 +273,7 @@ def run():
                     "anchor": ss.anchor,
                     "resize_ratio": ss.resize_ratio,
                     "shadow_preset": shadow_preset,
-                    "out_format": fmt,  # 배치에서는 매개변수 fmt 사용
+                    "out_format": fmt,
                     "quality": quality,
                     "composition_mode": composition_mode,
                 }
@@ -296,13 +295,6 @@ def run():
 
     with left:
         st.subheader("이미지 업로드")
-
-        # 자동 모드 안내
-        st.info("""
-        **🤖 자동 합성 모드**
-        - **PNG 템플릿**: 흰배경 + 액자 모드 (상품이 템플릿 안에)
-        - **JPG 템플릿**: 일반 모드 (상품이 템플릿 위에)
-        """)
 
         # 아이템 업로드
         item_files = st.file_uploader(
