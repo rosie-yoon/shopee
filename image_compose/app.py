@@ -163,14 +163,17 @@ def run():
         except:
             return
 
+        # ✅ 확장자로 모드 결정 (핵심!)
         template_ext = Path(template_file.name).suffix.lower()
         composition_mode = "frame" if template_ext == ".png" else "normal"
 
+        # 조합 유효성 검사
         has_alpha = has_useful_alpha(ensure_rgba(item_img))
         if not has_alpha and composition_mode == "normal":
             ss.preview_img = None
             return
 
+        # 그림자는 normal 모드에서만 적용
         shadow_preset = ss.shadow_preset if composition_mode == "normal" else "off"
 
         opts = {
@@ -178,7 +181,7 @@ def run():
             "resize_ratio": ss.resize_ratio,
             "shadow_preset": shadow_preset,
             "out_format": "PNG",
-            "composition_mode": composition_mode,
+            "composition_mode": composition_mode,  # ✅ 명시적 모드 전달
         }
 
         result = compose_one_bytes(item_img, template_img, **opts)
@@ -213,8 +216,9 @@ def run():
                 "anchor": ss.anchor,
                 "resize_ratio": ss.resize_ratio,
                 "shadow_preset": shadow_preset,
-                "out_format": "PNG",
-                "composition_mode": composition_mode,
+                "out_format": fmt,
+                "quality": quality,
+                "composition_mode": composition_mode,  # ✅ 올바른 모드 전달
             }
 
             result = compose_one_bytes(item_img, template_img, **opts)
