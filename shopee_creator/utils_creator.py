@@ -306,4 +306,69 @@ def forward_fill_by_group(
     
     return output
 
-# end of MASTER UTILS
+
+# =============================
+# [NEW] 중카테고리 & 시트명 유틸
+# =============================
+
+def mid_of_category(s: str, depth: int = 2) -> str:
+    """카테고리 경로에서 중카테고리(depth=2)까지만 추출
+
+    Examples:
+        >>> mid_of_category("Food & Beverages/Snacks/Chips")
+        "Food & Beverages/Snacks"
+        >>> mid_of_category("Health/Personal Care/Skincare")
+        "Health/Personal Care"
+        >>> mid_of_category("Health/Others")  # 2단계면 그대로
+        "Health/Others"
+        >>> mid_of_category("Home & Living")  # 1단계면 그대로
+        "Home & Living"
+    """
+    if not s or not isinstance(s, str):
+        return ""
+
+    # 슬래시로 분할하고 빈 부분 제거
+    parts = [p.strip() for p in s.strip().split("/") if p.strip()]
+
+    # depth보다 짧으면 전체 반환
+    if len(parts) <= depth:
+        return "/".join(parts)
+
+    # depth까지만 반환 (중카테고리 = 2단계)
+    return "/".join(parts[:depth])
+
+
+def safe_sheet_name(category_name: str, max_length: int = 31) -> str:
+    """Excel 시트명 제약 조건을 만족하도록 카테고리명 변환"""
+    if not category_name:
+        return "UNKNOWN"
+
+    # 특수문자를 언더스코어로 치환
+    clean_name = re.sub(r'[\\/*?:\[\]&]', '_', str(category_name))
+
+    # 공백을 언더스코어로
+    clean_name = clean_name.replace(' ', '_')
+
+    # 연속된 언더스코어 제거
+    clean_name = re.sub(r'_+', '_', clean_name)
+
+    # 앞뒤 언더스코어 제거
+    clean_name = clean_name.strip('_')
+
+    # 길이 제한 처리
+    if len(clean_name) <= max_length:
+        return clean_name
+
+    # 스마트 축약: 마지막 부분(세부 카테고리) 우선 보존
+    parts = clean_name.split('_')
+    if len(parts) >= 2:
+        first_part = parts[0][:10]
+        remaining_length = max_length - len(first_part) - 1
+        last_parts = '_'.join(parts[1:])
+
+        if len(last_parts) <= remaining_length:
+            return f"{first_part}_{last_parts}"
+        else:
+            return f"{first_part}_{last_parts[:remaining_length]}"
+
+    return clean_name[:max_length]
