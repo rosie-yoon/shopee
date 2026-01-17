@@ -1,8 +1,9 @@
-# image_compose/app.py
 from __future__ import annotations
 from pathlib import Path
 import io
 import zipfile
+import re
+from datetime import datetime
 
 import streamlit as st
 from PIL import Image as PILImage
@@ -13,19 +14,16 @@ from image_compose.composer_utils import (
     SHADOW_PRESETS,
     has_useful_alpha,
     ensure_rgba,
+    load_images_from_folder
 )
 
 BASE_DIR = Path(__file__).resolve().parent
 
 
-# ---------- Streamlit 호환 이미지 렌더 (가운데 정렬) ----------
+# ---------- Streamlit 호환 이미지 렌더 ----------
 def _st_image(img, width: int | None = None, **kwargs):
-    """Streamlit 버전별 image 인자 호환 + 중앙정렬.
-    width가 주어지면 해당 픽셀 폭으로 렌더.
-    """
     container = st.container()
     _, center_col, _ = container.columns([1, 4, 1])
-
     with center_col:
         if width is not None:
             return st.image(img, width=width, **kwargs)
@@ -40,10 +38,7 @@ def _st_image(img, width: int | None = None, **kwargs):
                 return st.image(img, **kwargs)
 
 
-
-# ---------- Streamlit이 받을 수 있는 이미지 타입으로 정규화 ----------
 def _to_streamlit_image_input(x):
-    """Streamlit이 받는 타입으로 정규화: PIL.Image | bytes | bytearray | BytesIO | 파일경로"""
     if x is None:
         return None
     if isinstance(x, (bytes, bytearray)):
@@ -65,9 +60,43 @@ def _to_streamlit_image_input(x):
     return None
 
 
+# ---------- 템플릿 파일명 유효성 검사 ----------
+def validate_template_names(files):
+    """
+    템플릿 파일명 검사:
+    1. 특수문자 포함 여부 (영문, 숫자, 언더스코어, 하이픈만 허용)
+    2. 중복된 이름(Stem) 존재 여부
+    """
+    if not files:
+        return True, []
+
+    seen_stems = set()
+    errors = []
+
+    # 허용된 문자: 영문, 숫자, 언더스코어, 하이픈만
+    pattern = re.compile(r'^[a-zA-Z0-9_-]+$')
+
+    for f in files:
+        stem = Path(f.name).stem
+
+        # 1. 특수문자 검사
+        if not pattern.match(stem):
+            errors.append(f"'{f.name}' - 영문, 숫자, _, - 만 사용 가능합니다")
+            continue
+
+        # 2. 중복 검사
+        if stem in seen_stems:
+            errors.append(f"'{stem}' - 중복된 템플릿명입니다 (확장자가 달라도 불가)")
+        else:
+            seen_stems.add(stem)
+
+    if errors:
+        return False, errors
+    return True, []
+
+
 def run():
-    PREVIEW_SCALE = 0.3  # 미리보기 렌더링을 50% 크기로
-    # set_page_config는 페이지 래퍼에서 호출됨
+    PREVIEW_SCALE = 0.3
     st.title("Cover Image")
 
     # ---- 세션 상태 초기화 ----
@@ -82,12 +111,7 @@ def run():
             "preview_list": [],
             "preview_idx": 0,
             "preview_sig": None,
-            "dlg_zip_sig": None,
-            "dlg_zip_buf": None,
-            "dlg_zip_count": 0,
-            "dlg_zip_name": "Thumb_Craft_Results.zip",
-            # 신규 옵션: 기본 False로 기존 동작 유지
-            "allow_non_alpha_overlay": False,
+            "template_in_front": False,  # 새로운 옵션명
         }
         for k, v in defaults.items():
             st.session_state.setdefault(k, v)
@@ -95,7 +119,7 @@ def run():
     init_state()
     ss = st.session_state
 
-    # ---------- 유틸: 파일/옵션 시그니처 ----------
+    # ---------- 유틸리티 함수들 ----------
     def _files_fingerprint(files):
         if not files:
             return []
@@ -122,10 +146,10 @@ def run():
             ss.anchor,
             float(ss.resize_ratio),
             ss.shadow_preset,
-            bool(ss.allow_non_alpha_overlay),
+            bool(ss.template_in_front),
         )
 
-    # ---- 합성 미리보기 (첫 1장) ----
+    # ---- 미리보기 업데이트 함수 ----
     def update_preview(item_files, template_files):
         ss.preview_img = None
         if not item_files or not template_files:
@@ -136,47 +160,25 @@ def run():
         item_img = PILImage.open(io.BytesIO(item_bytes))
         template_img = PILImage.open(io.BytesIO(tpl_bytes))
 
-        is_cutout = has_useful_alpha(ensure_rgba(item_img))
-        if (not is_cutout) and (not ss.allow_non_alpha_overlay):
-            try:
-                st.toast("투명 배경이 아닌 Item은 미리보기에서 제외됩니다.", icon="⚠️")
-            except Exception:
-                st.warning("투명 배경이 아닌 Item은 미리보기에서 제외됩니다.")
-            return
-
-        # 토글 ON + 누끼 없음이면 shadow는 호출 시점에만 off 처리
-        _shadow = ss.shadow_preset if (is_cutout or not ss.allow_non_alpha_overlay) else "off"
+        # 템플릿 앞 배치 모드에서는 그림자 강제 OFF
+        _shadow = ss.shadow_preset if not ss.template_in_front else "off"
 
         opts = {
             "anchor": ss.anchor,
             "resize_ratio": ss.resize_ratio,
             "shadow_preset": _shadow,
             "out_format": "PNG",
-            "overlay_template_if_no_alpha": bool(ss.allow_non_alpha_overlay),
+            "template_in_front": bool(ss.template_in_front),
         }
         result = compose_one_bytes(item_img, template_img, **opts)
         if not result:
             ss.preview_img = None
             return
 
-        data = None
-        if isinstance(result, tuple) and len(result) >= 1:
-            buf = result[0]
-            if hasattr(buf, "getvalue"):
-                data = buf.getvalue()
-            elif isinstance(buf, (bytes, bytearray)):
-                data = bytes(buf)
-        elif isinstance(result, PILImage.Image):
-            tmp = io.BytesIO()
-            result.save(tmp, format="PNG")
-            data = tmp.getvalue()
-        elif hasattr(result, "getvalue"):
-            data = result.getvalue()
-        elif isinstance(result, (bytes, bytearray)):
-            data = bytes(result)
+        buf = result[0]
+        data = buf.getvalue() if hasattr(buf, "getvalue") else bytes(buf)
         ss.preview_img = data
 
-    # ---- 다중 미리보기 생성 ----
     def generate_preview_list(item_files, template_files, max_count: int = 12):
         ss.preview_list = []
         ss.preview_idx = 0
@@ -189,9 +191,6 @@ def run():
                 break
             try:
                 item_img = PILImage.open(io.BytesIO(item_file.getvalue()))
-                is_cutout = has_useful_alpha(ensure_rgba(item_img))
-                if (not is_cutout) and (not ss.allow_non_alpha_overlay):
-                    continue
             except Exception:
                 continue
 
@@ -203,235 +202,327 @@ def run():
                 except Exception:
                     continue
 
-                _shadow = ss.shadow_preset if (is_cutout or not ss.allow_non_alpha_overlay) else "off"
+                _shadow = ss.shadow_preset if not ss.template_in_front else "off"
                 opts = {
                     "anchor": ss.anchor,
                     "resize_ratio": ss.resize_ratio,
                     "shadow_preset": _shadow,
                     "out_format": "PNG",
-                    "overlay_template_if_no_alpha": bool(ss.allow_non_alpha_overlay),
+                    "template_in_front": bool(ss.template_in_front),
                 }
                 result = compose_one_bytes(item_img, template_img, **opts)
-                if not result:
-                    continue
-                buf = result[0]
-                data = buf.getvalue() if hasattr(buf, "getvalue") else (bytes(buf) if isinstance(buf, (bytes, bytearray)) else None)
-                if data:
+                if result:
+                    buf = result[0]
+                    data = buf.getvalue()
                     out.append(data)
         ss.preview_list = out
 
     # ---- 배치 합성 & Zip 생성 ----
-    def run_batch_composition(item_files, template_files, fmt, quality, shop_variable):
+    def run_batch_composition(item_files, template_files, fmt, quality):
         zip_buf = io.BytesIO()
         count = 0
         with zipfile.ZipFile(zip_buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             for item_file in item_files:
-                item_img = PILImage.open(io.BytesIO(item_file.getvalue()))
-                is_cutout = has_useful_alpha(ensure_rgba(item_img))
-                if (not is_cutout) and (not ss.allow_non_alpha_overlay):
+                try:
+                    item_img = PILImage.open(io.BytesIO(item_file.getvalue()))
+                except:
                     continue
 
                 for template_file in template_files:
-                    template_img = PILImage.open(io.BytesIO(template_file.getvalue()))
-                    _shadow = ss.shadow_preset if (is_cutout or not ss.allow_non_alpha_overlay) else "off"
+                    try:
+                        template_img = PILImage.open(io.BytesIO(template_file.getvalue()))
+                    except:
+                        continue
+
+                    _shadow = ss.shadow_preset if not ss.template_in_front else "off"
                     opts = {
                         "anchor": ss.anchor,
                         "resize_ratio": ss.resize_ratio,
                         "shadow_preset": _shadow,
                         "out_format": fmt,
                         "quality": quality,
-                        "overlay_template_if_no_alpha": bool(ss.allow_non_alpha_overlay),
+                        "template_in_front": bool(ss.template_in_front),
                     }
                     result = compose_one_bytes(item_img, template_img, **opts)
                     if result:
                         img_buf, ext = result
                         item_name = Path(item_file.name).stem
-                        shop_var = shop_variable if shop_variable else Path(template_file.name).stem
-                        filename = f"{item_name}_C_{shop_var}.{ext}"
+
+                        # 템플릿 파일명에서 샵코드 자동 추출
+                        template_code = Path(template_file.name).stem
+
+                        # 새로운 파일명 규칙
+                        filename = f"{item_name}_C_{template_code}.{ext}"
+
                         zf.writestr(filename, img_buf.getvalue())
                         count += 1
         zip_buf.seek(0)
         return zip_buf, count
-
-    # ---- 다운로드 다이얼로그 ----
-    @st.dialog("출력 설정")
-    def show_save_dialog(item_files, template_files):
-        st.caption("샵코드를 입력하고 ‘다운로드’를 누르면 Zip 파일이 저장됩니다.")
-        shop_variable = st.text_input(
-            "Shop 구분값 (선택)",
-            key="dialog_shop_var",
-            help="입력 시 'Item_C_구분값.jpg' 형식으로 저장됩니다.",
-        )
-        cur_sig = (
-            tuple(_files_fingerprint(item_files)),
-            tuple(_files_fingerprint(template_files)),
-            _options_signature(),
-            shop_variable or "",
-        )
-        need_build = (ss.get("dlg_zip_sig") != cur_sig)
-        if need_build:
-            if not item_files or not template_files:
-                st.warning("Item / Template 파일을 먼저 업로드해주세요.")
-                return
-            with st.spinner("Zip 패키지를 준비 중입니다..."):
-                fmt = "JPEG"
-                quality = 100
-                zip_buf, count = run_batch_composition(item_files, template_files, fmt, quality, shop_variable)
-            if count == 0:
-                st.warning("생성된 이미지가 없습니다. Item이 투명 배경을 가졌는지 확인해주세요.")
-                return
-            ss.dlg_zip_sig = cur_sig
-            ss.dlg_zip_buf = zip_buf
-            ss.dlg_zip_count = count
-            ss.dlg_zip_name = f"Thumb_Craft_Results_{shop_variable}.zip" if shop_variable else "Thumb_Craft_Results.zip"
-        st.success(f"총 {ss.get('dlg_zip_count', 0)}개의 이미지가 준비되었습니다.")
-        clicked = st.download_button(
-            "다운로드",
-            ss.dlg_zip_buf,
-            file_name=ss.get("dlg_zip_name", "Thumb_Craft_Results.zip"),
-            mime="application/zip",
-            use_container_width=True,
-            key="dl_zip_btn",
-        )
-        st.caption("※ 샵코드를 바꾸면 Zip이 자동으로 갱신됩니다.")
-        if clicked:
-            st.rerun()
 
     # ---- UI 레이아웃 ----
     left, right = st.columns([1, 1])
 
     with left:
         st.subheader("이미지 업로드")
-        # 일반 사진 허용 토글: 업로드 타이틀 바로 아래
+
+        # 새로운 옵션: 템플릿 앞 배치 (흰색 배경 포함)
         st.checkbox(
-            "템플릿 앞에 배치",
-            key="allow_non_alpha_overlay",
+            "템플릿을 상품 앞에 배치 (액자 효과)",
+            key="template_in_front",
+            help="체크 시: 흰색 배경 → 상품 → 템플릿 순서로 합성됩니다.",
         )
-        # 업로드 허용 확장자: 토글 ON이면 JPG/JPEG도 허용
-        _item_types = ["png", "webp"] + (["jpg", "jpeg"] if ss.allow_non_alpha_overlay else [])
+
+        # 아이템 업로드
         item_files = st.file_uploader(
-            "1. Item 이미지 업로드 (누끼 딴 이미지, PNG/WEBP)",
-            type=_item_types,
+            "1. Item 이미지 업로드",
+            type=["png", "webp", "jpg", "jpeg"],
             accept_multiple_files=True,
-            key=f"item_{ss.item_uploader_key}_{1 if ss.allow_non_alpha_overlay else 0}",
+            key=f"item_{ss.item_uploader_key}",
+            help="투명 배경 PNG/WEBP 권장"
         )
         if st.button("아이템 리스트 삭제", key="btn_clear_items"):
             ss.item_uploader_key += 1
             st.rerun()
+
+        # 템플릿 업로드
         template_files = st.file_uploader(
-            "2. Template 이미지 업로드",
+            "2. Template 이미지 업로드 (파일명 = 샵코드)",
             type=["png", "jpg", "jpeg", "webp"],
             accept_multiple_files=True,
-            key=f"tpl_{ss.template_uploader_key}_{1 if ss.allow_non_alpha_overlay else 0}",
+            key=f"tpl_{ss.template_uploader_key}",
+            help="파일명이 샵코드로 사용됩니다 (예: RORO.jpg → RORO)"
         )
         if st.button("템플릿 삭제", key="btn_clear_tpls"):
             ss.template_uploader_key += 1
+            st.rerun()
+
+        # 템플릿 파일명 유효성 검사
+        is_valid_tpl, tpl_errors = validate_template_names(template_files)
+        if template_files and not is_valid_tpl:
+            st.error("🚨 템플릿 파일명 오류가 발견되었습니다!")
+            for err in tpl_errors:
+                st.write(f"❌ {err}")
+            st.info("💡 파일명을 수정한 후 다시 업로드해주세요.")
 
     with right:
         st.subheader("이미지 설정")
         c1, c2, c3 = st.columns(3)
+
+        # 배치 위치
         c1.selectbox(
             "배치 위치",
-            [
-                "center",
-                "top",
-                "bottom",
-                "left",
-                "right",
-                "top-left",
-                "top-right",
-                "bottom-left",
-                "bottom-right",
-            ],
+            ["center", "top", "bottom", "left", "right", "top-left", "top-right", "bottom-left", "bottom-right"],
             key="anchor",
         )
+
+        # 리사이즈 비율
         resize_options = [1.3, 1.2, 1.1, 1.0, 0.9, 0.8, 0.7]
-        if "resize_ratio" not in ss:
-            ss["resize_ratio"] = 1.0
-        current = ss["resize_ratio"]
+        current = ss.get("resize_ratio", 1.0)
         idx = resize_options.index(current) if current in resize_options else resize_options.index(1.0)
         ss["resize_ratio"] = c2.selectbox(
             "리사이즈",
             resize_options,
             index=idx,
-            format_func=lambda x: f"{int(round(x*100))}%",
+            format_func=lambda x: f"{int(round(x * 100))}%",
             key="sel_resize_ratio",
         )
-        # 위젯 생성 전에 값 강제 세팅 → disabled selectbox 렌더
-        if ss.allow_non_alpha_overlay and st.session_state.get("shadow_preset") != "off":
+
+        # 그림자 프리셋 (템플릿 앞 배치 시 비활성화)
+        if ss.template_in_front and st.session_state.get("shadow_preset") != "off":
             st.session_state["shadow_preset"] = "off"
-        if ss.allow_non_alpha_overlay:
-            c3.selectbox("그림자 프리셋", list(SHADOW_PRESETS.keys()), key="shadow_preset", disabled=True)
-        else:
-            c3.selectbox("그림자 프리셋", list(SHADOW_PRESETS.keys()), key="shadow_preset")
 
-        # ---- 프리뷰 고정 슬롯(깜빡임 최소화) ----
-        preview_header = st.empty()
-        preview_nav = st.empty()
-        preview_image = st.empty()
-        preview_hint = st.empty()
-
-        preview_header.subheader("미리보기")
-
-        # ---- 실시간 적용: 입력/옵션 시그니처를 기준으로 자동 갱신 ----
-        cur_sig = (
-            tuple(_files_fingerprint(item_files)),
-            tuple(_files_fingerprint(template_files)),
-            _options_signature(),
+        c3.selectbox(
+            "그림자 프리셋",
+            list(SHADOW_PRESETS.keys()),
+            key="shadow_preset",
+            disabled=ss.template_in_front,
+            help="템플릿 앞 배치 시 자동으로 비활성화됩니다"
         )
-        if cur_sig != ss.preview_sig:
-            update_preview(item_files, template_files)
-            generate_preview_list(item_files, template_files)
-            ss.preview_sig = cur_sig
 
-        # ---- 미리보기 네비게이션 / 렌더 ----
+        # ---- 미리보기 섹션 ----
+        st.subheader("미리보기")
+
+        # 유효성 검사 통과 시에만 미리보기 갱신
+        if is_valid_tpl:
+            cur_sig = (
+                tuple(_files_fingerprint(item_files)),
+                tuple(_files_fingerprint(template_files)),
+                _options_signature(),
+            )
+            if cur_sig != ss.preview_sig:
+                update_preview(item_files, template_files)
+                generate_preview_list(item_files, template_files)
+                ss.preview_sig = cur_sig
+        else:
+            ss.preview_img = None
+            ss.preview_list = []
+
+        # 미리보기 렌더링
         if ss.preview_list:
             n = len(ss.preview_list)
-            with preview_nav.container():
-                cprev, ccenter, cnext = st.columns([1, 5, 1])
-                with cprev:
-                    if st.button("◀", use_container_width=True, key="nav_prev"):
-                        ss.preview_idx = (ss.preview_idx - 1) % n
-                with ccenter:
-                    st.write(f"**{ss.preview_idx + 1} / {n}**")
-                with cnext:
-                    if st.button("▶", use_container_width=True, key="nav_next"):
-                        ss.preview_idx = (ss.preview_idx + 1) % n
+            cprev, ccenter, cnext = st.columns([1, 5, 1])
+            with cprev:
+                if st.button("◀", use_container_width=True, key="nav_prev"):
+                    ss.preview_idx = (ss.preview_idx - 1) % n
+            with ccenter:
+                st.write(f"**{ss.preview_idx + 1} / {n}**")
+            with cnext:
+                if st.button("▶", use_container_width=True, key="nav_next"):
+                    ss.preview_idx = (ss.preview_idx + 1) % n
+
             current_bytes = ss.preview_list[ss.preview_idx]
-            # 미리보기 50% 축소 렌더
             try:
                 _im = PILImage.open(io.BytesIO(current_bytes))
                 _w = int(max(1, _im.width * PREVIEW_SCALE))
-            except Exception:
+            except:
                 _w = None
             _st_image(_to_streamlit_image_input(current_bytes), caption=f"미리보기 #{ss.preview_idx + 1}", width=_w)
-            preview_hint.empty()
+
+        elif ss.preview_img:
+            try:
+                _im = PILImage.open(io.BytesIO(ss.preview_img))
+                _w = int(max(1, _im.width * PREVIEW_SCALE))
+            except:
+                _w = None
+            _st_image(_to_streamlit_image_input(ss.preview_img), caption="미리보기", width=_w)
         else:
-            img_in = _to_streamlit_image_input(ss.preview_img)
-            if img_in is not None:
-                try:
-                    _src = img_in if isinstance(img_in, (bytes, bytearray)) else (img_in.getvalue() if hasattr(img_in, "getvalue") else None)
-                    _im = PILImage.open(io.BytesIO(_src)) if _src is not None else None
-                    _w = int(max(1, _im.width * PREVIEW_SCALE)) if _im else None
-                except Exception:
-                    _w = None
-                _st_image(img_in, caption="미리보기 (단일)", width=_w)
-                preview_hint.caption("업로드/설정 변경 시 자동으로 여러 장 미리보기를 생성합니다.")
+            st.info("이미지를 업로드하면 미리보기가 표시됩니다.")
+
+        st.divider()
+
+        # 즉시 생성 및 다운로드 버튼
+        btn_disabled = (not item_files or not template_files or not is_valid_tpl)
+
+        # 날짜 기반 Zip 파일명 생성 (YYMMDD 형식)
+        date_str = datetime.now().strftime("%y%m%d")
+        zip_filename = f"Thumb_Craft_Results_{date_str}.zip"
+
+        if st.button(
+                "🎨 이미지 생성 & 다운로드 준비",
+                type="primary",
+                use_container_width=True,
+                disabled=btn_disabled
+        ):
+            with st.spinner("이미지 합성 중입니다..."):
+                zip_buf, count = run_batch_composition(item_files, template_files, "JPEG", 100)
+
+            if count > 0:
+                st.success(f"✅ 총 {count}장의 이미지가 생성되었습니다!")
+                st.download_button(
+                    label=f"💾 {zip_filename} 다운로드",
+                    data=zip_buf,
+                    file_name=zip_filename,
+                    mime="application/zip",
+                    use_container_width=True,
+                )
             else:
-                preview_image.empty()
-                preview_hint.caption("파일을 업로드하면 미리보기가 표시됩니다.")
+                st.warning("생성된 이미지가 없습니다. 파일을 확인해주세요.")
 
-        st.button(
-            "이미지 생성",
-            type="primary",
-            use_container_width=True,
-            key="btn_open_save_dialog",
-            disabled=(not item_files or not template_files),
-            on_click=lambda: show_save_dialog(item_files, template_files),
-        )
-
-    # 바닥의 예전 Zip 다운로드 섹션은 사용하지 않음
+        # 비활성화 이유 표시
+        if btn_disabled and template_files and not is_valid_tpl:
+            st.warning("⚠️ 템플릿 파일명을 수정해야 생성할 수 있습니다.")
 
 
+# ---------- CLI 실행 블록 ----------
 if __name__ == "__main__":
+    import argparse
+    from tqdm import tqdm
+    from PIL import Image
+
+
+    def main_cli():
+        parser = argparse.ArgumentParser(description="Thumb Craft - CLI 이미지 합성 도구")
+        parser.add_argument("--item_folder", required=True, help="Item 이미지 폴더")
+        parser.add_argument("--template_folder", required=True, help="Template 이미지 폴더")
+        parser.add_argument("--out_dir", default="C_out", help="결과물 저장 폴더")
+
+        parser.add_argument("--anchor", default="center",
+                            choices=["center", "top", "bottom", "left", "right", "top-left", "top-right", "bottom-left",
+                                     "bottom-right"])
+        parser.add_argument("--resize_ratio", type=float, default=1.0)
+        parser.add_argument("--shadow_preset", default="off", choices=SHADOW_PRESETS.keys())
+        parser.add_argument("--out_format", default="JPEG", choices=["JPEG", "PNG"])
+        parser.add_argument("--quality", type=int, default=92)
+        parser.add_argument("--template_in_front", action="store_true", help="템플릿을 맨 앞에 배치 (흰색 배경 추가)")
+
+        args = parser.parse_args()
+
+        item_folder = Path(args.item_folder)
+        template_folder = Path(args.template_folder)
+        out_dir = Path(args.out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        item_files = load_images_from_folder(item_folder)
+        template_files = load_images_from_folder(template_folder)
+
+        # CLI 유효성 검사
+        template_paths = [Path(name + ".dummy") for name, _ in template_files]  # 검사용 임시 객체
+        _, errors = validate_template_names(template_paths)
+        if errors:
+            print("❌ 템플릿 파일명 오류:")
+            for e in errors:
+                print(f"  {e}")
+            return
+
+        if not item_files or not template_files:
+            print("❌ 파일이 없습니다.")
+            return
+
+        # 템플릿 앞 배치 시 그림자 강제 OFF
+        _shadow = args.shadow_preset if not args.template_in_front else "off"
+
+        opts = {
+            "anchor": args.anchor,
+            "resize_ratio": args.resize_ratio,
+            "shadow_preset": _shadow,
+            "out_format": args.out_format,
+            "quality": args.quality,
+            "template_in_front": args.template_in_front,
+        }
+
+        # 날짜 기반 Zip 파일명
+        date_str = datetime.now().strftime("%y%m%d")
+        zip_path = out_dir.parent / f"{out_dir.name}_{date_str}.zip"
+
+        generated_count = 0
+
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            total_jobs = len(item_files) * len(template_files)
+            with tqdm(total=total_jobs, desc="이미지 합성 중") as pbar:
+                for item_name, item_path in item_files:
+                    try:
+                        item_img = Image.open(item_path)
+                    except:
+                        pbar.update(len(template_files))
+                        continue
+
+                    for template_name, template_path in template_files:
+                        try:
+                            template_img = Image.open(template_path)
+                        except:
+                            pbar.update(1)
+                            continue
+
+                        result = compose_one_bytes(item_img, template_img, **opts)
+                        if result:
+                            img_buf, ext = result
+
+                            # 템플릿 파일명에서 샵코드 자동 추출
+                            filename = f"{item_name}_C_{template_name}.{ext}"
+
+                            # 개별 파일 저장
+                            save_path = out_dir / filename
+                            save_path.write_bytes(img_buf.getvalue())
+                            # Zip 저장
+                            zf.writestr(filename, img_buf.getvalue())
+                            generated_count += 1
+                        pbar.update(1)
+
+        print(f"✅ 완료! 총 {generated_count}개 이미지 생성")
+        print(f"   📁 개별 파일: {out_dir}")
+        print(f"   📦 압축 파일: {zip_path}")
+
+
+    main_cli()
+else:
     run()
