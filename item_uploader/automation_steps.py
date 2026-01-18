@@ -3,6 +3,7 @@
 automation_steps_revised.py
 - Step 1부터 Step 7까지의 핵심 자동화 로직을 통합한 모듈입니다.
 - 각 함수는 main_controller.py에서 호출됩니다.
+- [완료] 대카테고리 기준 → 중카테고리 기준 전환
 """
 
 from __future__ import annotations
@@ -20,11 +21,70 @@ from gspread.utils import rowcol_to_a1
 from gspread.exceptions import WorksheetNotFound
 import pandas as pd
 
-
 from .utils_common import (
     load_env, with_retry, safe_worksheet, header_key, top_of_category,
     get_tem_sheet_name, get_env, get_bool_env, hex_to_rgb01, strip_category_id
 )
+
+
+# ==============================================================================
+# [NEW] 중카테고리 & 시트명 유틸 (Create Template과 동일 로직)
+# ==============================================================================
+
+def mid_of_category(s: str, depth: int = 2) -> str:
+    """
+    카테고리 경로에서 중카테고리(depth=2)까지만 추출
+    Shopee 숫자 코드 자동 제거 (예: '100832 - Food & Beverages/Beverages' → 'Food & Beverages/Beverages')
+
+    Examples:
+        >>> mid_of_category("100832 - Food & Beverages/Beverages")
+        "Food & Beverages/Beverages"
+        >>> mid_of_category("Beauty/Makeup/Lips")
+        "Beauty/Makeup"
+    """
+    if not s or not isinstance(s, str):
+        return ""
+
+    # 1단계: 숫자 코드 제거 (예: "100832 - " → "")
+    cleaned = s.strip()
+    cleaned = re.sub(r'^\s*\d+\s*-\s*', '', cleaned)
+
+    # 2단계: 슬래시로 분할하여 중카테고리 추출
+    parts = [p.strip() for p in cleaned.split("/") if p.strip()]
+
+    if len(parts) <= depth:
+        return "/".join(parts)
+    return "/".join(parts[:depth])
+
+
+def safe_sheet_name(category_name: str, max_length: int = 31) -> str:
+    """Excel 시트명 제약 조건을 만족하도록 카테고리명 변환"""
+    if not category_name:
+        return "UNKNOWN"
+
+    # 특수문자를 언더스코어로 치환
+    clean_name = re.sub(r'[\\/*?:\[\]&]', '_', str(category_name))
+    clean_name = clean_name.replace(' ', '_')
+    clean_name = re.sub(r'_+', '_', clean_name)
+    clean_name = clean_name.strip('_')
+
+    if len(clean_name) <= max_length:
+        return clean_name
+
+    # 스마트 축약: 마지막 부분(세부 카테고리) 우선 보존
+    parts = clean_name.split('_')
+    if len(parts) >= 2:
+        first_part = parts[0][:10]
+        remaining_length = max_length - len(first_part) - 1
+        last_parts = '_'.join(parts[1:])
+
+        if len(last_parts) <= remaining_length:
+            return f"{first_part}_{last_parts}"
+        else:
+            return f"{first_part}_{last_parts[:remaining_length]}"
+
+    return clean_name[:max_length]
+
 
 # ==============================================================================
 # 공통 헬퍼 함수
@@ -49,7 +109,8 @@ def _pick_index_by_candidates(header_row: List[str], candidates: List[str]) -> i
                 return i
     return -1
 
-def _find_col_index(keys: List[str], name: str, extra_alias: List[str]=[]) -> int:
+
+def _find_col_index(keys: List[str], name: str, extra_alias: List[str] = []) -> int:
     """헤더 키 목록(keys=header_key 적용된 리스트)에서 name 또는 alias를 찾음"""
     tgt = header_key(name)
     aliases = [header_key(a) for a in extra_alias] + [tgt]
@@ -62,6 +123,7 @@ def _find_col_index(keys: List[str], name: str, extra_alias: List[str]=[]) -> in
         if any(a and a in k for a in aliases):
             return i
     return -1
+
 
 def _append_failures(sh, rows: List[List[str]]):
     """Failures 탭에 rows를 append. 공간 부족 시 자동 resize."""
@@ -79,24 +141,24 @@ def _append_failures(sh, rows: List[List[str]]):
         with_retry(lambda: ws.update(values=rows, range_name=f"A{start_row}"))
 
     except WorksheetNotFound:
-         # 시트가 아예 없는 경우 새로 만듦 (main_controller에서 초기화하지만 안전장치)
+        # 시트가 아예 없는 경우 새로 만듦 (main_controller에서 초기화하지만 안전장치)
         ws = with_retry(lambda: sh.add_worksheet(title="Failures", rows=1000, cols=10))
-        header = [["PID","Category","Name","Reason","Detail"]]
+        header = [["PID", "Category", "Name", "Reason", "Detail"]]
         with_retry(lambda: ws.update(values=header + rows, range_name="A1"))
 
 
 # ==============================================================================
-# STEP 1: TEM_OUTPUT 생성
+# STEP 1: TEM_OUTPUT 생성 (중카테고리 기준 전환)
 # ==============================================================================
 
 def run_step_1(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
-    """Step 1: BASIC+MEDIA -> TEM_OUTPUT 생성 (+ SALES로 SKU/Parent SKU 매핑)"""
-    print("\n[ Automation ] Starting Step 1: Build TEM_OUTPUT...")
+    """Step 1: BASIC+MEDIA -> TEM_OUTPUT 생성 (+ SALES로 SKU/Parent SKU 매핑) [중카테고리 기준]"""
+    print("\n[ Automation ] Starting Step 1: Build TEM_OUTPUT (Mid-Category Based)...")
 
     basic_header = int(get_env("BASIC_HEADER_ROW", "2"))
-    basic_first  = int(get_env("BASIC_FIRST_DATA_ROW", "3"))
+    basic_first = int(get_env("BASIC_FIRST_DATA_ROW", "3"))
     media_header = int(get_env("MEDIA_HEADER_ROW", "2"))
-    media_first  = int(get_env("MEDIA_FIRST_DATA_ROW", "6"))
+    media_first = int(get_env("MEDIA_FIRST_DATA_ROW", "6"))
     ref_sheet = get_env("TEMPLATE_DICT_SHEET_NAME", "TemplateDict")
     tem_name = get_tem_sheet_name()
 
@@ -118,18 +180,23 @@ def run_step_1(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
 
     class MediaHeader:
         def __init__(self):
-            self.pid = -1; self.pname = -1; self.category = -1; self.cover = -1
-            self.item_images: List[int] = []; self.var_label = -1
-            self.opt_name_cols: List[int] = []; self.opt_img_cols: List[int] = []
+            self.pid = -1;
+            self.pname = -1;
+            self.category = -1;
+            self.cover = -1
+            self.item_images: List[int] = [];
+            self.var_label = -1
+            self.opt_name_cols: List[int] = [];
+            self.opt_img_cols: List[int] = []
 
     def parse_media_header_row(header_row: List[str]) -> MediaHeader:
         h = MediaHeader()
         keys = [header_key(x) for x in header_row]
-        h.pid      = _find_col_index(keys, "productid",["pid","itemid","ettitleproductid"])
-        h.pname    = _find_col_index(keys, "productname", ["itemname","name"])
+        h.pid = _find_col_index(keys, "productid", ["pid", "itemid", "ettitleproductid"])
+        h.pname = _find_col_index(keys, "productname", ["itemname", "name"])
         h.category = _find_col_index(keys, "category")
-        h.cover    = _find_col_index(keys, "coverimage", ["coverimg"])
-        h.var_label= _find_col_index(keys, "variationname1", ["variationname","variation"])
+        h.cover = _find_col_index(keys, "coverimage", ["coverimg"])
+        h.var_label = _find_col_index(keys, "variationname1", ["variationname", "variation"])
         for i, raw in enumerate(header_row):
             if header_key(raw).startswith("itemimage"): h.item_images.append(i)
         patt = re.compile(r"^option(\d+)name$")
@@ -138,7 +205,7 @@ def run_step_1(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
             if not m: continue
             n = m.group(1)
             h.opt_name_cols.append(idx)
-            img_idx = next((j for j, r in enumerate(header_row) if header_key(r)==f"option{n}image"), -1)
+            img_idx = next((j for j, r in enumerate(header_row) if header_key(r) == f"option{n}image"), -1)
             h.opt_img_cols.append(img_idx)
         return h
 
@@ -151,11 +218,15 @@ def run_step_1(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
         sales_vals = with_retry(lambda: sales_ws.get_all_values()) or []
         if sales_vals:
             hdr = sales_vals[0]
-            pid_idx = _pick_index_by_candidates(hdr, ["product id","pid","item id","et_title_product_id"])
-            psku_idx = _pick_index_by_candidates(hdr, ["parent sku","parent_sku","seller sku","seller_sku","et_title_parent_sku"])
-            var_name_idx = _pick_index_by_candidates(hdr, ["variation name","option name","option 1 name","variation option","variation","option"])
-            sku_idx = _pick_index_by_candidates(hdr, ["sku","variation sku","child sku","option sku","seller_child_sku","et_title_child_sku"])
-            
+            pid_idx = _pick_index_by_candidates(hdr, ["product id", "pid", "item id", "et_title_product_id"])
+            psku_idx = _pick_index_by_candidates(hdr, ["parent sku", "parent_sku", "seller sku", "seller_sku",
+                                                       "et_title_parent_sku"])
+            var_name_idx = _pick_index_by_candidates(hdr, ["variation name", "option name", "option 1 name",
+                                                           "variation option", "variation", "option"])
+            sku_idx = _pick_index_by_candidates(hdr,
+                                                ["sku", "variation sku", "child sku", "option sku", "seller_child_sku",
+                                                 "et_title_child_sku"])
+
             if pid_idx >= 0:
                 for r in range(1, len(sales_vals)):
                     row = sales_vals[r]
@@ -170,23 +241,24 @@ def run_step_1(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
                             sku_by_pid_opt[(pid, re.sub(r"\s+", " ", vname.lower()))] = sku
     except Exception as e:
         print(f"[SKU][WARN] SALES 탭 처리 스킵: {e}")
-    
+
     buckets: Dict[str, Dict[str, List]] = {}
     failures: List[List[str]] = []
-    
+
     def set_if_exists(headers: List[str], row: List[str], name: str, value: str):
         idx = _find_col_index([header_key(h) for h in headers], name)
         if idx >= 0: row[idx] = value
-    
+
     for r in range(media_first - 1, len(media_vals)):
         row = media_vals[r]
-        pid = (row[media_hdr.pid] or "").strip() if media_hdr.pid >= 0 and len(row)>media_hdr.pid else ""
-        cat = (row[media_hdr.category] or "").strip() if media_hdr.category >= 0 and len(row)>media_hdr.category else ""
+        pid = (row[media_hdr.pid] or "").strip() if media_hdr.pid >= 0 and len(row) > media_hdr.pid else ""
+        cat = (row[media_hdr.category] or "").strip() if media_hdr.category >= 0 and len(
+            row) > media_hdr.category else ""
         if not pid or not cat: continue
-        
+
         pname = (row[media_hdr.pname] if media_hdr.pname >= 0 else "") or ""
         item_imgs = [(row[i] or "").strip() for i in media_hdr.item_images if i < len(row)]
-        
+
         options = []
         for i, name_col in enumerate(media_hdr.opt_name_cols):
             opt_name = (row[name_col] if name_col < len(row) else "").strip()
@@ -196,14 +268,33 @@ def run_step_1(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
                 img_val = (row[media_hdr.opt_img_cols[i]] if media_hdr.opt_img_cols[i] < len(row) else "").strip()
             options.append((opt_name, img_val))
 
-        top_norm = header_key(top_of_category(cat) or "")
-        headers = template_dict.get(top_norm)
+        # ========================================
+        # 핵심 변경: 중카테고리 기준 + 3단계 폴백
+        # ========================================
+        mid_cat_raw = mid_of_category(cat)  # "Food & Beverages/Beverages"
+        mid_norm = header_key(mid_cat_raw or "")  # 정규화된 키
+
+        # 1순위: 중카테고리 템플릿
+        headers = template_dict.get(mid_norm)
+
         if not headers:
-            failures.append([pid, cat, pname, "TEMPLATE_TOPLEVEL_NOT_FOUND", f"top={top_of_category(cat)}"])
-            continue
+            # 2순위: 대카테고리 폴백 (기존 호환성)
+            top_norm = header_key(top_of_category(cat) or "")
+            headers = template_dict.get(top_norm)
+
+            if headers:
+                print(f"   [FALLBACK] Using top-level template for '{cat}'")
+            else:
+                # 3순위: 기본 템플릿
+                headers = ["Category", "Product Name", "SKU", "Brand", "Stock", "Weight"]
+                print(f"   [DEFAULT] Template not found for '{mid_cat_raw}'. Using default.")
+                failures.append(["", cat, pname, "TEMPLATE_NOT_FOUND", f"mid={mid_cat_raw}"])
 
         psku_val = parent_sku_map.get(pid, "")
-        
+
+        # 버킷 키를 중카테고리 기준으로 변경
+        bucket_key = mid_norm
+
         if not options:
             arr = [""] * len(headers)
             set_if_exists(headers, arr, "category", cat)
@@ -211,8 +302,9 @@ def run_step_1(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
             for k, url in enumerate(item_imgs, start=1):
                 if url: set_if_exists(headers, arr, f"item image {k}", url)
             if psku_val: set_if_exists(headers, arr, "parent sku", psku_val)
-            b = buckets.setdefault(top_norm, {"headers": headers, "pids": [], "rows": []})
-            b["pids"].append([pid]); b["rows"].append(arr)
+            b = buckets.setdefault(bucket_key, {"headers": headers, "pids": [], "rows": []})
+            b["pids"].append([pid]);
+            b["rows"].append(arr)
         else:
             var_label_val = (row[media_hdr.var_label] if media_hdr.var_label >= 0 else "") or "color"
             for (opt_name_raw, opt_img) in options:
@@ -232,9 +324,10 @@ def run_step_1(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
                     set_if_exists(headers, arr, "sku", csku_val)
                 else:
                     failures.append([pid, cat, pname, "SKU_MATCH_NOT_FOUND", f"opt={opt_name_raw}"])
-                
-                b = buckets.setdefault(top_norm, {"headers": headers, "pids": [], "rows": []})
-                b["pids"].append([pid]); b["rows"].append(arr)
+
+                b = buckets.setdefault(bucket_key, {"headers": headers, "pids": [], "rows": []})
+                b["pids"].append([pid]);
+                b["rows"].append(arr)
 
     out_matrix: List[List[str]] = []
     for _, pack in buckets.items():
@@ -253,7 +346,7 @@ def run_step_1(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
         end_a1 = rowcol_to_a1(len(out_matrix), max_cols)
         with_retry(lambda: tem_ws.resize(rows=len(out_matrix) + 10, cols=max_cols + 10))
         with_retry(lambda: tem_ws.update(values=out_matrix, range_name=f"A1:{end_a1}"))
-    
+
     if failures:
         _append_failures(sh, failures)
 
@@ -261,6 +354,7 @@ def run_step_1(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
     print(f"TEM 생성 행수: {len(out_matrix) - len(buckets):,}")
     print(f"Failures 기록: {len(failures):,}")
     print("Step 1: Build TEM_OUTPUT Finished.")
+
 
 # ==============================================================================
 # STEP 2: Mandatory 기본값 채우기
@@ -277,7 +371,8 @@ def run_step_2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
     try:
         tem_ws = safe_worksheet(sh, tem_name)
     except WorksheetNotFound:
-        print(f"[!] {tem_name} 탭 없음. Step1 선행 필요."); return
+        print(f"[!] {tem_name} 탭 없음. Step1 선행 필요.");
+        return
 
     def _read_defaults_ws(ws):
         vals = with_retry(lambda: ws.get_all_values()) or []
@@ -287,7 +382,7 @@ def run_step_2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
         a_idx = _find_col_index(keys, "attribute", ["attr", "property"])
         d_idx = _find_col_index(keys, "defaultvalue", ["default"])
         if min(c_idx, a_idx, d_idx) < 0: return {}
-        
+
         out = {}
         for r in range(1, len(vals)):
             row = vals[r]
@@ -344,7 +439,7 @@ def run_step_2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
             for attr_norm in catprops_map[norm_cat]:
                 j = _find_col_index(current_hdr_keys, attr_norm)
                 if j >= 0: color_ranges_by_col[j].append((r0, r0 + 1))
-        
+
         if norm_cat in defaults_map:
             for attr_norm, dval in defaults_map[norm_cat].items():
                 if not dval: continue
@@ -361,19 +456,25 @@ def run_step_2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
 
     def _merge(spans):
         if not spans: return []
-        spans.sort(); merged = [spans[0]]
+        spans.sort();
+        merged = [spans[0]]
         for s, e in spans[1:]:
             ls, le = merged[-1]
-            if s <= le: merged[-1] = (ls, max(le, e))
-            else: merged.append((s, e))
+            if s <= le:
+                merged[-1] = (ls, max(le, e))
+            else:
+                merged.append((s, e))
         return merged
 
     requests = []
     color = hex_to_rgb01(color_hex)
     for j, spans in color_ranges_by_col.items():
         for s, e in _merge(spans):
-            requests.append({"repeatCell": {"range": {"sheetId": sheet_id, "startRowIndex": s, "endRowIndex": e, "startColumnIndex": 1 + j, "endColumnIndex": 1 + j + 1}, "cell": {"userEnteredFormat": {"backgroundColor": color}}, "fields": "userEnteredFormat.backgroundColor"}})
-    
+            requests.append({"repeatCell": {
+                "range": {"sheetId": sheet_id, "startRowIndex": s, "endRowIndex": e, "startColumnIndex": 1 + j,
+                          "endColumnIndex": 1 + j + 1}, "cell": {"userEnteredFormat": {"backgroundColor": color}},
+                "fields": "userEnteredFormat.backgroundColor"}})
+
     if requests:
         with_retry(lambda: sh.batch_update({"requests": requests}))
 
@@ -382,37 +483,35 @@ def run_step_2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
     print(f"색칠된 열 개수: {len(color_ranges_by_col):,}")
     print("Step 2: Fill Mandatory Defaults Finished.")
 
+
 # ==============================================================================
 # STEP 3: FDA 코드 채우기
 # ==============================================================================
 
 def run_step_3(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet, overwrite: bool = False):
-    """
-    (개선) Step 3: Reference 시트의 목록을 기준으로, TEM_OUTPUT 행에 고정 FDA 코드를 채웁니다.
-    """
+    """Step 3: Reference 시트의 목록을 기준으로, TEM_OUTPUT 행에 고정 FDA 코드를 채웁니다."""
     print("\n[ Automation ] Starting Step 3: Fill FDA Code...")
-    
+
     tem_name = get_tem_sheet_name()
-    fda_sheet_name = get_env("FDA_CATEGORIES_SHEET_NAME", "TH Cos") # .env에서 시트 이름 읽기
+    fda_sheet_name = get_env("FDA_CATEGORIES_SHEET_NAME", "TH Cos")
     fda_header = get_env("FDA_HEADER_NAME", "FDA Registration No.")
-    FDA_CODE = "10-1-9999999"  # 고정값으로 변경
+    FDA_CODE = "10-1-9999999"
 
     try:
-        # Reference 시트에서 FDA 대상 카테고리 목록 읽기
         fda_ws = safe_worksheet(ref, fda_sheet_name)
         fda_vals_2d = with_retry(lambda: fda_ws.get_values('A:A', value_render_option='UNFORMATTED_VALUE'))
         fda_vals = [r[0] for r in (fda_vals_2d or []) if r and str(r[0]).strip()]
-        # (개선) 전체 경로를 소문자로 변환하여 비교
         target_categories = {str(cat).strip().lower() for cat in fda_vals if str(cat).strip()}
     except Exception as e:
-        print(f"[!] '{fda_sheet_name}' 탭을 읽는 데 실패했습니다: {e}. Step 3을 건너<binary data, 2 bytes><binary data, 2 bytes><binary data, 2 bytes>니다.")
+        print(f"[!] '{fda_sheet_name}' 탭을 읽는 데 실패했습니다: {e}. Step 3을 건너뜁니다.")
         return
 
     try:
         tem_ws = safe_worksheet(sh, tem_name)
         vals = with_retry(lambda: tem_ws.get_all_values()) or []
     except WorksheetNotFound:
-        print(f"[!] {tem_name} 탭 없음. Step1 선행 필요."); return
+        print(f"[!] {tem_name} 탭 없음. Step1 선행 필요.");
+        return
 
     if not vals: print("[!] TEM_OUTPUT 비어 있음."); return
 
@@ -430,16 +529,14 @@ def run_step_3(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet, overwrite: boo
 
         pid = (row[0] if len(row) > 0 else "").strip()
         if not pid: continue
-        
-        # (개선) TEM_OUTPUT의 카테고리 값도 전체 경로를 소문자로 변환하여 비교
+
         category_val_raw = (row[col_category_B + 1] if len(row) > (col_category_B + 1) else "").strip()
         category_val_normalized = category_val_raw.lower()
-        
-        # (개선) 정규화된 전체 경로가 목록에 있는지 확인
+
         if category_val_normalized and category_val_normalized in target_categories:
             c_fda_sheet_col = col_fda_B + 2
             cur_fda = (row[c_fda_sheet_col - 1] if len(row) >= c_fda_sheet_col else "").strip()
-            
+
             if not cur_fda or overwrite:
                 updates.append(Cell(row=r0 + 1, col=c_fda_sheet_col, value=FDA_CODE))
                 updated_rows += 1
@@ -447,7 +544,7 @@ def run_step_3(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet, overwrite: boo
     if updates:
         with_retry(lambda: tem_ws.update_cells(updates, value_input_option="RAW"))
 
-    print(f"========== STEP 3 FDA RESULT (WRITE) ==========")
+    print(f"========== STEP 3 FDA RESULT ==========")
     print(f"적용된 셀 수: {updated_rows:,}")
     print("Step 3: Fill FDA Code Finished.")
 
@@ -462,9 +559,8 @@ def run_step_4(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
 
     tem_name = get_tem_sheet_name()
     STOCK_VALUE = int(get_env("STEP4_STOCK_VALUE", "1000"))
-    DTOS_VALUE  = int(get_env("STEP4_DTOS_VALUE", "1"))
+    DTOS_VALUE = int(get_env("STEP4_DTOS_VALUE", "1"))
 
-    # (개선) Step 3의 변경 사항이 반영된 최신 데이터를 다시 읽어옴
     tem_ws = safe_worksheet(sh, tem_name)
     tem_vals = with_retry(lambda: tem_ws.get_all_values()) or []
     if not tem_vals: print("[!] TEM_OUTPUT 비어 있음."); return
@@ -472,7 +568,8 @@ def run_step_4(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
     try:
         margin_ws = safe_worksheet(sh, "MARGIN")
         margin_vals = with_retry(lambda: margin_ws.get_all_values()) or []
-    except Exception: margin_vals = []
+    except Exception:
+        margin_vals = []
 
     try:
         brand_ws = safe_worksheet(ref, "Brand")
@@ -503,7 +600,7 @@ def run_step_4(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
             bname = (row[1] or "").strip()
             bcode = (row[2] or "").strip()
             if bname: brand_name_to_code[re.sub(r"\s+", " ", bname.lower())] = bcode
-    
+
     failures: List[List[str]] = []
     cells_to_update: List[Cell] = []
     cnt_stock = cnt_dtos = cnt_weight = cnt_brand = 0
@@ -513,16 +610,16 @@ def run_step_4(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
         row = tem_vals[r]
         if (row[1] if len(row) > 1 else "").strip().lower() == "category":
             current_headers = row[1:]
-            idx_stock_B  = _find_col_index([header_key(h) for h in current_headers], "stock")
-            idx_dtos_B   = _find_col_index([header_key(h) for h in current_headers], "daystoship")
+            idx_stock_B = _find_col_index([header_key(h) for h in current_headers], "stock")
+            idx_dtos_B = _find_col_index([header_key(h) for h in current_headers], "daystoship")
             idx_weight_B = _find_col_index([header_key(h) for h in current_headers], "weight")
-            idx_brand_B  = _find_col_index([header_key(h) for h in current_headers], "brand")
-            idx_sku_B    = _find_col_index([header_key(h) for h in current_headers], "sku")
+            idx_brand_B = _find_col_index([header_key(h) for h in current_headers], "brand")
+            idx_sku_B = _find_col_index([header_key(h) for h in current_headers], "sku")
             continue
         if not current_headers: continue
-        
+
         pid = (row[0] if len(row) > 0 else "").strip()
-        
+
         if idx_stock_B >= 0:
             c = idx_stock_B + 2
             if (row[c - 1] if len(row) >= c else "") != str(STOCK_VALUE):
@@ -533,7 +630,7 @@ def run_step_4(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
             if (row[c - 1] if len(row) >= c else "") != str(DTOS_VALUE):
                 cells_to_update.append(Cell(row=r + 1, col=c, value=str(DTOS_VALUE)))
                 cnt_dtos += 1
-        
+
         sku_val = ""
         if idx_sku_B >= 0:
             csku = idx_sku_B + 2
@@ -546,7 +643,8 @@ def run_step_4(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
                 if (row[c - 1] if len(row) >= c else "") != w:
                     cells_to_update.append(Cell(row=r + 1, col=c, value=w))
                     cnt_weight += 1
-            else: failures.append([pid, "", "", "WEIGHT_MAP_MISSING", f"sku={sku_val}"])
+            else:
+                failures.append([pid, "", "", "WEIGHT_MAP_MISSING", f"sku={sku_val}"])
 
         if idx_brand_B >= 0 and sku_val:
             bname = sku_to_brand_name.get(sku_val)
@@ -558,12 +656,10 @@ def run_step_4(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
                 cnt_brand += 1
             if bname and not bcode:
                 failures.append([pid, "", "", "BRAND_CODE_NOT_FOUND", f"brand_name={bname}"])
-    
+
     if cells_to_update:
         with_retry(lambda: tem_ws.update_cells(cells_to_update, value_input_option="USER_ENTERED"))
 
-    # EXCLUDE_BRAND_FAILURES=true 이면 BRAND_CODE_NOT_FOUND는 Failures 탭에서 제외
-    # EXCLUDE_FAILURE_CODES="CODE1,CODE2" 형식으로 추가 예외코드를 콤마로 지정 가능
     if get_bool_env("EXCLUDE_BRAND_FAILURES", True) or get_env("EXCLUDE_FAILURE_CODES", ""):
         exclude_codes = [c.strip() for c in get_env("EXCLUDE_FAILURE_CODES", "").split(",") if c.strip()]
         if get_bool_env("EXCLUDE_BRAND_FAILURES", True):
@@ -573,7 +669,7 @@ def run_step_4(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
                 r for r in failures
                 if not (len(r) >= 4 and str(r[3]).strip() in set(exclude_codes))
             ]
-    
+
     if failures:
         _append_failures(sh, failures)
 
@@ -590,24 +686,23 @@ def run_step_5(sh: gspread.Spreadsheet):
     print("\n[ Automation ] Starting Step 5: Fill essential info...")
 
     tem_name = get_tem_sheet_name()
-    # (개선) Step 4의 변경 사항이 반영된 최신 데이터를 다시 읽어옴
     tem_ws = safe_worksheet(sh, tem_name)
     tem_vals = with_retry(lambda: tem_ws.get_all_values()) or []
 
     basic_ws = safe_worksheet(sh, "BASIC")
     basic_vals = with_retry(lambda: basic_ws.get_all_values()) or []
-    
+
     margin_ws = safe_worksheet(sh, "MARGIN")
     margin_vals = with_retry(lambda: margin_ws.get_all_values()) or []
 
-    # --- 데이터 맵 준비 ---
     pid_to_desc = {row[0].strip(): (row[3] if len(row) > 3 else "") for row in basic_vals[1:] if row and row[0].strip()}
-    sku_to_price = {row[0].strip(): (row[4] if len(row) > 4 else "") for row in margin_vals[1:] if row and row[0].strip()}
-    
+    sku_to_price = {row[0].strip(): (row[4] if len(row) > 4 else "") for row in margin_vals[1:] if
+                    row and row[0].strip()}
+
     updates: List[Cell] = []
     current_headers = None
     pid_groups = defaultdict(list)
-    
+
     for r_idx, row in enumerate(tem_vals):
         if (row[1] if len(row) > 1 else "").strip().lower() == "category":
             current_headers = [header_key(h) for h in row[1:]]
@@ -617,28 +712,25 @@ def run_step_5(sh: gspread.Spreadsheet):
             idx_sku = _find_col_index(current_headers, "sku")
             continue
         if not current_headers: continue
-        
+
         pid = (row[0] if len(row) > 0 else "").strip()
         if not pid: continue
-        
+
         pid_groups[pid].append(r_idx + 1)
-        
-        # 1. Description
+
         if idx_desc != -1:
             desc = pid_to_desc.get(pid, "")
             updates.append(Cell(row=r_idx + 1, col=idx_desc + 2, value=desc))
 
-        # 3. Global SKU Price
         if idx_price != -1 and idx_sku != -1:
             sku_val = (row[idx_sku + 1] if len(row) > idx_sku + 1 else "").strip()
             if sku_val:
                 price = sku_to_price.get(sku_val, "")
                 updates.append(Cell(row=r_idx + 1, col=idx_price + 2, value=price))
 
-    # 2. Variation Integration
     if idx_var_integ != -1:
         for pid, rows in pid_groups.items():
-            if len(rows) > 1: # Only for variations
+            if len(rows) > 1:
                 v_code = f"V{pid}"
                 for r in rows:
                     updates.append(Cell(row=r, col=idx_var_integ + 2, value=v_code))
@@ -653,16 +745,13 @@ def run_step_5(sh: gspread.Spreadsheet):
 # STEP 6: Cover Image URL 생성
 # ==============================================================================
 def run_step_6(sh: gspread.Spreadsheet, shop_code: str):
-    """
-    (개선) Step 6: Parent SKU 우선 규칙을 적용하여 Cover image URL을 동적으로 생성합니다.
-    """
+    """Step 6: Parent SKU 우선 규칙을 적용하여 Cover image URL을 동적으로 생성합니다."""
     print("\n[ Automation ] Starting Step 6: Generate Cover Image URLs...")
-    
+
     tem_name = get_tem_sheet_name()
-    # (개선) Step 5의 변경 사항이 반영된 최신 데이터를 다시 읽어옴
     tem_ws = safe_worksheet(sh, tem_name)
     tem_vals = with_retry(lambda: tem_ws.get_all_values()) or []
-    
+
     host = get_env("IMAGE_HOSTING_URL", "")
     if not host.endswith("/"): host += "/"
 
@@ -678,18 +767,15 @@ def run_step_6(sh: gspread.Spreadsheet, shop_code: str):
             continue
         if not current_headers or idx_cover == -1: continue
 
-        # (개선) Parent SKU와 SKU 값을 모두 가져옵니다.
         psku_val = (row[idx_psku + 1] if idx_psku != -1 and len(row) > idx_psku + 1 else "").strip()
         sku_val = (row[idx_sku + 1] if idx_sku != -1 and len(row) > idx_sku + 1 else "").strip()
 
-        # (개선) URL 생성에 사용할 SKU를 결정합니다 (Parent SKU 우선).
         sku_for_url = psku_val if psku_val else sku_val
 
-        # 사용할 SKU가 있는 경우에만 URL을 생성합니다.
         if sku_for_url:
             url = f"{host}{sku_for_url}_C_{shop_code}.jpg"
             updates.append(Cell(row=r_idx + 1, col=idx_cover + 2, value=url))
-    
+
     if updates:
         with_retry(lambda: tem_ws.update_cells(updates, value_input_option="USER_ENTERED"))
 
@@ -697,27 +783,25 @@ def run_step_6(sh: gspread.Spreadsheet, shop_code: str):
 
 
 # ==============================================================================
-# STEP 7: 최종 템플릿 분할 & 다운로드 (헤더 유지)
+# STEP 7: 최종 템플릿 분할 & 다운로드 (중카테고리 기준, 헤더 유지)
 # ==============================================================================
+
 def run_step_7(sh: gspread.Spreadsheet):
-    """Step 7: TEM_OUTPUT을 TopLevel Category 단위로 분할하여 '헤더를 유지'한 엑셀 생성"""
-    print("\n[ Automation ] Starting Step 7: Generating final template file (keep headers)...")
+    """Step 7: TEM_OUTPUT을 중카테고리 단위로 분할하여 '헤더를 유지'한 엑셀 생성"""
+    print("\n[ Automation ] Starting Step 7: Generating final template file (Mid-Category Based)...")
 
     tem_name = get_tem_sheet_name()
     tem_ws = safe_worksheet(sh, tem_name)
 
-    # TEM_OUTPUT 전체를 한 번만 읽음 (Read 요청 최소화)
     all_data = with_retry(lambda: tem_ws.get_all_values())
     if not all_data:
         print("[!] TEM_OUTPUT sheet is empty. Cannot generate file.")
         return None
 
     df = pd.DataFrame(all_data)
-    # 문자열화(헤더 탐지에 .str 사용 가능하게)
     for c in df.columns:
         df[c] = df[c].astype(str)
 
-    # 헤더 행 탐지: 두 번째 컬럼(인덱스 1)이 'category' 인 행
     header_mask = df.iloc[:, 1].str.lower().eq("category")
     header_indices = df.index[header_mask].tolist()
     if not header_indices:
@@ -726,17 +810,15 @@ def run_step_7(sh: gspread.Spreadsheet):
 
     output = BytesIO()
 
-    # 엑셀 생성 엔진 선택 (xlsxwriter 우선, 없으면 openpyxl)
     try:
-        import xlsxwriter  # noqa: F401
+        import xlsxwriter
         engine = "xlsxwriter"
     except Exception:
         engine = "openpyxl"
 
     with pd.ExcelWriter(output, engine=engine) as writer:
 
-        # === [추가] Failures 시트 첫 탭으로 내보내기 정책 ===
-        # EXPORT_FAILURES_MODE: "auto"(기본, 값 있으면 포함) | "always"(무조건 포함) | "never"(항상 제외)
+        # Failures 시트 우선 내보내기
         mode = (get_env("EXPORT_FAILURES_MODE", "auto") or "auto").strip().lower()
         try:
             fvals = []
@@ -747,30 +829,23 @@ def run_step_7(sh: gspread.Spreadsheet):
                 except WorksheetNotFound:
                     fvals = []
 
-            # 값 유무 판단: 한 셀이라도 비어있지 않으면 "데이터 있음"
             has_values = any(any((c or "").strip() for c in row) for row in fvals)
-
             include_failures = (mode == "always") or (mode == "auto" and has_values)
             if include_failures:
                 df_fail = pd.DataFrame(fvals)
-                # 원본 그리드 보존을 위해 header=False
                 df_fail.to_excel(writer, sheet_name="Failures", index=False, header=False)
         except Exception as e:
             print(f"[WARN] Failures 시트 첨부 중 오류: {e}")
 
         for i, header_index in enumerate(header_indices):
-            # [헤더행+1, 다음 헤더행) 구간이 데이터
             start_row = header_index + 1
             end_row = header_indices[i + 1] if i + 1 < len(header_indices) else len(df)
             if start_row >= end_row:
-                continue  # 빈 구간
-    
-            # ---- 헤더/데이터 구성 ----
-            # 기존 로직과 동일하게 "첫 번째 컬럼은 제외"하고 저장
-            header_row = df.iloc[header_index, 1:]               # 헤더(2열부터)
-            chunk_df = df.iloc[start_row:end_row, 1:].copy()     # 데이터(2열부터)
+                continue
 
-            # 첫 번째 데이터 컬럼의 하이픈 공백 정규화 (기존 로직 유지)
+            header_row = df.iloc[header_index, 1:]
+            chunk_df = df.iloc[start_row:end_row, 1:].copy()
+
             if not chunk_df.empty:
                 first_col = chunk_df.columns[0]
                 chunk_df[first_col] = (
@@ -779,9 +854,7 @@ def run_step_7(sh: gspread.Spreadsheet):
                     .str.replace(r"\s*-\s*", "-", regex=True)
                 )
 
-            # 컬럼명 = 헤더 행 값
             columns = header_row.astype(str).tolist()
-            # 길이 보정(이상치 방어)
             if len(columns) != chunk_df.shape[1]:
                 if len(columns) < chunk_df.shape[1]:
                     columns += [f"col_{k}" for k in range(len(columns), chunk_df.shape[1])]
@@ -789,47 +862,18 @@ def run_step_7(sh: gspread.Spreadsheet):
                     columns = columns[: chunk_df.shape[1]]
             chunk_df.columns = columns
 
-        for i, header_index in enumerate(header_indices):
-            # [헤더행+1, 다음 헤더행) 구간이 데이터
-            start_row = header_index + 1
-            end_row = header_indices[i + 1] if i + 1 < len(header_indices) else len(df)
-            if start_row >= end_row:
-                continue  # 빈 구간
-
-            # ---- 헤더/데이터 구성 ----
-            # 기존 로직과 동일하게 "첫 번째 컬럼은 제외"하고 저장
-            header_row = df.iloc[header_index, 1:]               # 헤더(2열부터)
-            chunk_df = df.iloc[start_row:end_row, 1:].copy()     # 데이터(2열부터)
-
-            # 첫 번째 데이터 컬럼의 하이픈 공백 정규화 (기존 로직 유지)
-            if not chunk_df.empty:
-                first_col = chunk_df.columns[0]
-                chunk_df[first_col] = (
-                    chunk_df[first_col]
-                    .astype(str)
-                    .str.replace(r"\s*-\s*", "-", regex=True)
-                )
-
-            # 컬럼명 = 헤더 행 값
-            columns = header_row.astype(str).tolist()
-            # 길이 보정(이상치 방어)
-            if len(columns) != chunk_df.shape[1]:
-                if len(columns) < chunk_df.shape[1]:
-                    columns += [f"col_{k}" for k in range(len(columns), chunk_df.shape[1])]
-                else:
-                    columns = columns[: chunk_df.shape[1]]
-            chunk_df.columns = columns
-
-            # 시트명: 첫 행의 category에서 TopLevel 추출 (없으면 UNKNOWN)
+            # ========================================
+            # 핵심 변경: 중카테고리 기준 시트명 생성
+            # ========================================
             cat_col_name = next((c for c in columns if c.lower() == "category"), None)
             first_cat = str(chunk_df.iloc[0][cat_col_name]) if (cat_col_name and not chunk_df.empty) else "UNKNOWN"
-            top_level_name = top_of_category(first_cat) or "UNKNOWN"
-            sheet_name = re.sub(r"[\s/\\*?:\[\]]", "_", str(top_level_name).title())[:31]
 
-            # ---- 엑셀에 쓰기 (헤더 유지) ----
+            # 중카테고리 기준으로 시트명 생성
+            mid_level_name = mid_of_category(first_cat) or "UNKNOWN"
+            sheet_name = safe_sheet_name(mid_level_name)
+
             chunk_df.to_excel(writer, sheet_name=sheet_name, index=False)
 
-            # 편의 포맷(선택): 첫 행 프리즈 + 간단 오토폭
             try:
                 ws = writer.sheets.get(sheet_name)
                 if ws:
@@ -850,5 +894,5 @@ def run_step_7(sh: gspread.Spreadsheet):
                 pass
 
     output.seek(0)
-    print("Step 7: Final template file generated successfully (headers kept).")
+    print("Step 7: Final template file generated successfully (Mid-Category Based).")
     return output
