@@ -178,13 +178,13 @@ def _pick_index_by_candidates(header_row: List[str], candidates: List[str]) -> i
 def _load_template_dict(ref: gspread.Spreadsheet) -> Dict[str, List[str]]:
     """
     Reference 시트의 템플릿 정의 탭에서 중카테고리 → 헤더 매핑 로드
-    기본값: 'cat props' (중카테고리 기준으로 업데이트된 시트)
+    기본값: 'TemplateDict' (중카테고리 기준으로 업데이트된 시트)
     """
-    ref_sheet = get_env("TEMPLATE_DICT_SHEET_NAME", "cat props")
+    ref_sheet = "TemplateDict"
     try:
         ws = ref.worksheet(ref_sheet)
     except WorksheetNotFound:
-        raise WorksheetNotFound(f"Required sheet '{ref_sheet}' not found in '{ref.title}'")
+        raise WorksheetNotFound(f"Required sheet '{ref_sheet}' not found in '{ref.title}'")ref_sheet = "TemplateDict"
 
     vals = with_retry(lambda: ws.get_all_values()) or []
     print(f"[TDict][DEBUG] ref='{ref.title}' tab='{ref_sheet}' rows={len(vals)}")
