@@ -181,10 +181,11 @@ def _load_template_dict(ref: gspread.Spreadsheet) -> Dict[str, List[str]]:
     기본값: 'TemplateDict' (중카테고리 기준으로 업데이트된 시트)
     """
     ref_sheet = "TemplateDict"
+
     try:
         ws = ref.worksheet(ref_sheet)
     except WorksheetNotFound:
-        raise WorksheetNotFound(f"Required sheet '{ref_sheet}' not found in '{ref.title}'")ref_sheet = "TemplateDict"
+        raise WorksheetNotFound(f"Required sheet '{ref_sheet}' not found in '{ref.title}'")
 
     vals = with_retry(lambda: ws.get_all_values()) or []
     print(f"[TDict][DEBUG] ref='{ref.title}' tab='{ref_sheet}' rows={len(vals)}")
