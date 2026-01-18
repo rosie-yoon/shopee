@@ -37,20 +37,28 @@ from .utils_creator import (
 # ===================================================================
 
 def mid_of_category(s: str, depth: int = 2) -> str:
-    """카테고리 경로에서 중카테고리(depth=2)까지만 추출
+    """
+    카테고리 경로에서 중카테고리(depth=2)까지만 추출
+    Shopee 숫자 코드 자동 제거 (예: '100440 - ' → '')
 
     Examples:
-        >>> mid_of_category("Food & Beverages/Snacks/Chips")
-        "Food & Beverages/Snacks"
-        >>> mid_of_category("Health/Personal Care/Skincare")
+        >>> mid_of_category("100832 - Food & Beverages/Beverages")
+        "Food & Beverages/Beverages"
+        >>> mid_of_category("100440 - Health/Personal Care")
         "Health/Personal Care"
-        >>> mid_of_category("Home & Living")
-        "Home & Living"
+        >>> mid_of_category("Beauty/Makeup/Lips")
+        "Beauty/Makeup"
     """
     if not s or not isinstance(s, str):
         return ""
 
-    parts = [p.strip() for p in s.strip().split("/") if p.strip()]
+    # 1단계: 숫자 코드 제거 (예: "100832 - " → "")
+    cleaned = s.strip()
+    cleaned = re.sub(r'^\s*\d+\s*-\s*', '', cleaned)
+
+    # 2단계: 슬래시로 분할하여 중카테고리 추출
+    parts = [p.strip() for p in cleaned.split("/") if p.strip()]
+
     if len(parts) <= depth:
         return "/".join(parts)
     return "/".join(parts[:depth])
