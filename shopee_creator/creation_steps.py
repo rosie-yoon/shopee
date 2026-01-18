@@ -625,17 +625,29 @@ def run_step_C4_prices(sh: gspread.Spreadsheet) -> None:
 # C5 전용 헬퍼
 # -------------------------------------------------------------------
 def _find_header_row_and_offset(tem_values: List[List[str]]) -> tuple[int, int, Dict[str, int]]:
-    """TEM_OUTPUT에서 헤더 행과 PID 오프셋, 관심 컬럼 인덱스 맵을 찾는다."""
+    """
+    TEM_OUTPUT에서 헤더 행과 PID 오프셋, 관심 컬럼 인덱스 맵을 찾는다.
+    - 헤더 행 판정 전략을 다층으로 완화:
+      1) 기존 방식(맨 앞 'PID' 유무)
+      2) B열이 'Category'인 행을 헤더로 간주
+      3) base_offset=0/1 양쪽을 모두 시도
+    - 컬럼 매칭은 alias를 폭넓게 허용
+    - Variation이 없어도 SKU가 있으면 IPv만 부분 업데이트 가능하도록 허용(커버/D이미지는 Variation 필요)
+    반환 인덱스는 항상 'PID를 제외한 기준'으로 통일한다.
+    """
     if not tem_values:
         raise RuntimeError("TEM_OUTPUT이 비어 있습니다.")
 
+    # 폭넓은 alias 집합
     WANT = {
         "variation": {
             "variationintegrationno", "variationintegrationno.", "variationno", "variationintegration", "variation",
             "variation integration no", "variation integration", "variation code", "variation id"
         },
         "sku": {"sku", "seller_sku", "seller sku", "item sku"},
-        "cover": {"coverimage", "cover image", "coverimageurl", "cover image url", "cover", "cover url"},
+        "cover": {
+            "coverimage", "cover image", "coverimageurl", "cover image url", "cover", "cover url"
+        },
         "ipv": {
             "imagepervariation", "image per variation",
             "imageurlpervariation", "image url per variation",
@@ -649,15 +661,19 @@ def _find_header_row_and_offset(tem_values: List[List[str]]) -> tuple[int, int, 
             return None
         ix_map: Dict[str, int] = {}
 
+        # helper: 포함 여부 검사
         def _first_index(matchers: set[str]) -> int:
+            # 정확 일치 우선
             for i, k in enumerate(keys):
                 if k in matchers:
                     return i
+            # 부분 일치 허용
             for i, k in enumerate(keys):
                 if any(m for m in matchers if m and m in k):
                     return i
             return -1
 
+        # variation / sku / cover / ipv
         vi = _first_index(WANT["variation"])
         if vi != -1: ix_map["variation"] = vi
         si = _first_index(WANT["sku"])
@@ -667,6 +683,7 @@ def _find_header_row_and_offset(tem_values: List[List[str]]) -> tuple[int, int, 
         ii = _first_index(WANT["ipv"])
         if ii != -1: ix_map["ipv"] = ii
 
+        # item image 1..8 (정확 매칭 우선, 그다음 부분)
         for n in range(1, 9):
             want_exact = header_key(f"item image {n}")
             found = -1
@@ -682,12 +699,13 @@ def _find_header_row_and_offset(tem_values: List[List[str]]) -> tuple[int, int, 
             if found != -1:
                 ix_map[f"item{n}"] = found
 
+        # 이 행을 헤더로 인정할 조건:
         has_any_image = ("cover" in ix_map) or ("ipv" in ix_map) or any(f"item{n}" in ix_map for n in range(1, 9))
-        has_key_for_fill = ("variation" in ix_map) or ("sku" in ix_map)
+        has_key_for_fill = ("variation" in ix_map) or ("sku" in ix_map)  # 최소한 하나는 있어야 채울 수 있음
 
         return ix_map if (has_any_image and has_key_for_fill) else None
 
-    # 1차: 맨 앞 'PID' 판단
+    # 1) 1차: 기존 로직(맨 앞 'PID' 판단) + base_offset=1
     for r, row in enumerate(tem_values):
         if not row:
             continue
@@ -696,14 +714,14 @@ def _find_header_row_and_offset(tem_values: List[List[str]]) -> tuple[int, int, 
             if ix_map:
                 return r, 1, ix_map
 
-    # 2차: B열이 'Category'인 행
+    # 2) 2차: B열이 'Category'인 행을 헤더로 가정 + base_offset=1
     for r, row in enumerate(tem_values):
         if len(row) > 1 and header_key(row[1]) == "category":
             ix_map = _try_parse_row_as_header(row, base_offset_guess=1)
             if ix_map:
                 return r, 1, ix_map
 
-    # 3차: base_offset=0 시도
+    # 3) 3차: base_offset=0도 시도 (PID가 진짜로 없게 만든 경우)
     for r, row in enumerate(tem_values):
         if not row:
             continue
@@ -711,19 +729,20 @@ def _find_header_row_and_offset(tem_values: List[List[str]]) -> tuple[int, int, 
         if ix_map:
             return r, 0, ix_map
 
+    # 실패 시 어떤 키들이 보였는지 힌트를 남김
     sample = next((row for row in tem_values if any(str(c).strip() for c in row)), [])
     seen = [header_key(x) for x in sample]
     raise RuntimeError(
-        "TEM_OUTPUT 헤더 행을 찾지 못했습니다. "
+        "TEM_OUTPUT 헤더 행을 찾지 못했습니다 (Variation/이미지 관련 컬럼 누락). "
         f"예시 행 키: {seen[:15]}"
     )
 
-
+# C5 전용: Collection에서 Variation별 상세이미지 개수 맵 만들기
 def _build_details_count_by_var(collection_values: List[List[str]]) -> Dict[str, int]:
-    """Collection 시트에서 Details Index를 읽어 {variation: dcount}를 만든다."""
+    """Collection 시트에서 Details Index를 읽어 {variation(or parent sku): dcount}를 만든다."""
     VAR_KEYS = {
         "variationintegrationno.", "variationno.", "variationintegration", "variation",
-        "parent sku", "parentsku"
+        "parent sku", "parentsku"  # ← Parent SKU도 Variation 키로 인정
     }
     DET_KEYS = {
         "detailsindex", "details", "detailindex",
@@ -761,11 +780,64 @@ def _build_details_count_by_var(collection_values: List[List[str]]) -> Dict[str,
 
 
 # -------------------------------------------------------------------
-# C5: Image URL 채우기
+# C5: Image URL 채우기 (데이터 버전)
+# -------------------------------------------------------------------
+def run_step_C5_images_values(
+    tem_values: List[List[str]],
+    collection_values: List[List[str]],
+    base_url: str,
+    shop_code: str,
+) -> List[List[str]]:
+    """
+    TEM_OUTPUT values(2D 배열)를 입력받아, 이미지 URL 컬럼을 채워서 같은 형태로 반환.
+    - PID 유무 자동 대응
+    - 있는 컬럼만 부분 업데이트
+    - Details Index 폭넓은 별칭 허용
+    """
+    if not tem_values:
+        return tem_values
+
+    base = (base_url or "").rstrip("/") + "/"
+    hdr_row, base_offset, ix_map = _find_header_row_and_offset(tem_values)
+    dmap = _build_details_count_by_var(collection_values)
+
+    out = list(tem_values)
+    for r in range(hdr_row + 1, len(out)):
+        row = out[r]
+        data = row[base_offset:]
+        # --- 중간 헤더 행 스킵: B열이 'Category'면 이 행은 헤더 ---
+        if len(data) > 0 and header_key(data[0]) == "category":
+            continue
+
+        if not data:
+            continue
+
+        var_no = data[ix_map["variation"]].strip() if "variation" in ix_map and ix_map["variation"] < len(data) else ""
+        sku    = data[ix_map["sku"]].strip()       if "sku"       in ix_map and ix_map["sku"]       < len(data) else ""
+        dcount = dmap.get(var_no, 0)
+
+        # Cover (base/VAR_C_CODE.jpg) — shop_code 필요
+        if "cover" in ix_map and ix_map["cover"] < len(data):
+            data[ix_map["cover"]] = f"{base}{var_no}_C_{shop_code}.jpg" if (var_no and shop_code) else ""
+
+        # IPv (base/SKU.jpg)
+        if "ipv" in ix_map and ix_map["ipv"] < len(data):
+            data[ix_map["ipv"]] = f"{base}{sku}.jpg" if sku else ""
+
+        # D1..D8 (base/VAR_Dn.jpg)
+        for n in range(1, 9):
+            key = f"item{n}"
+            if key in ix_map and ix_map[key] < len(data):
+                data[ix_map[key]] = f"{base}{var_no}_D{n}.jpg" if (var_no and dcount >= n) else ""
+
+        out[r] = row[:base_offset] + data
+
+    return out
+
+# -------------------------------------------------------------------
+# C5: Image URL 채우기 (I/O 래퍼 — 컨트롤러 호환 시그니처)
 # -------------------------------------------------------------------
 def run_step_C5_images(sh: gspread.Spreadsheet, base_url: str, shop_code: str):
-    print("\n[ Create ] Step C5: Fill Image URLs...")
-
     tem_ws = safe_worksheet(sh, get_tem_sheet_name())
     try:
         coll_ws = _find_worksheet_by_alias(
@@ -777,44 +849,18 @@ def run_step_C5_images(sh: gspread.Spreadsheet, base_url: str, shop_code: str):
     tem_values = with_retry(lambda: tem_ws.get_all_values()) or []
     collection_values = with_retry(lambda: coll_ws.get_all_values()) or []
 
-    # ========================================
-    # [핵심] 이미지 컬럼 없으면 안전하게 건너뛰기
-    # ========================================
-    try:
-        new_values = run_step_C5_images_values(
-            tem_values=tem_values,
-            collection_values=collection_values,
-            base_url=base_url,
-            shop_code=shop_code,
-        )
+    new_values = run_step_C5_images_values(
+        tem_values=tem_values,
+        collection_values=collection_values,
+        base_url=base_url,
+        shop_code=shop_code,
+    )
 
-        if new_values != tem_values:
-            end_a1 = rowcol_to_a1(len(new_values), max(len(r) for r in new_values) if new_values else 1)
-            with_retry(lambda: tem_ws.update(values=new_values, range_name=f"A1:{end_a1}"))
-            print("[C5] 이미지 URL 채우기 완료.")
-        else:
-            print("[C5] 변경사항 없음 (이미지 컬럼 없음).")
-
-    except RuntimeError as e:
-        if "TEM_OUTPUT 헤더 행을 찾지 못했습니다" in str(e):
-            print("\n" + "=" * 60)
-            print("[C5] ⚠️  경고: 이미지 컬럼을 찾을 수 없습니다.")
-            print("=" * 60)
-            print("💡 해결방법:")
-            print("   1. Reference 시트의 'TemplateDict' 탭을 여세요")
-            print("   2. 각 중카테고리 행에 다음 컬럼들을 추가하세요:")
-            print("      - Cover Image")
-            print("      - Image per Variation")
-            print("      - Item Image 1 ~ Item Image 8")
-            print("   3. 저장 후 다시 실행하세요")
-            print("=" * 60)
-            print("⏭️  이미지 없이 다음 단계로 진행합니다...\n")
-            return  # 오류 없이 다음 단계로
-        else:
-            raise
+    if new_values != tem_values:
+        end_a1 = rowcol_to_a1(len(new_values), max(len(r) for r in new_values) if new_values else 1)
+        with_retry(lambda: tem_ws.update(values=new_values, range_name=f"A1:{end_a1}"))
 
     print("[C5] Done.")
-
 
 # -------------------------------------------------------------------
 # C6: Stock/Weight/Brand 보정
