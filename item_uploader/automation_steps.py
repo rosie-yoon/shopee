@@ -61,6 +61,10 @@ def generate_category_keys(category_raw: str) -> tuple[str, str, str]:
     """
     카테고리에서 전체/중간/상위 키를 모두 생성
 
+    full_key: 전체 경로
+    mid_key:  마지막 노드만 제외한 '부모 경로' (기존 depth=2 방식 대신)
+    top_key:  최상위 카테고리
+
     Returns:
         (full_key, mid_key, top_key)
     """
@@ -70,13 +74,28 @@ def generate_category_keys(category_raw: str) -> tuple[str, str, str]:
     # 숫자 코드 제거
     cleaned = re.sub(r'^\s*\d+\s*-\s*', '', category_raw.strip())
 
-    # 슬래시 주변 공백 정규화 (중요!)
+    # 슬래시 주변 공백 정규화
     normalized = re.sub(r'\s*/\s*', '/', cleaned)
 
-    # 키 생성
-    full_key = header_key(normalized)  # 전체 경로
-    mid_key = header_key(mid_of_category(normalized))  # 중카테고리
-    top_key = header_key(top_of_category(normalized))  # 대카테고리
+    # 슬래시로 분할하여 각 레벨 추출
+    parts = [p.strip() for p in normalized.split('/') if p.strip()]
+
+    if not parts:
+        return "", "", ""
+
+    # 전체 경로
+    full_key = header_key('/'.join(parts))
+
+    # 부모 경로 (마지막 노드 제거) - 핵심 개선!
+    if len(parts) > 1:
+        parent_path = '/'.join(parts[:-1])
+        mid_key = header_key(parent_path)
+    else:
+        # 단일 레벨인 경우 그대로 사용
+        mid_key = header_key(parts[0])
+
+    # 대카테고리 (최상위 노드)
+    top_key = header_key(parts[0])
 
     return full_key, mid_key, top_key
 
