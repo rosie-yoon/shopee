@@ -185,6 +185,11 @@ def _load_template_dict(ref: gspread.Spreadsheet) -> Dict[str, List[str]]:
                 print(f"   [TEMPLATE_LOAD] '{original_category}' → '{normalized_key}'")
 
     print(f"   [TEMPLATE_LOAD] Total templates loaded: {len(out)}")
+    print(f"\n📋 [TEMPLATE_LOAD] 로딩 완료:")
+    print(f"   총 템플릿 개수: {len(out)}")
+    print(f"   샘플 키들 (처음 10개):")
+    for i, key in enumerate(list(out.keys())[:10], 1):
+        print(f"     {i}. '{key}'")
     return out
 
 
@@ -293,16 +298,37 @@ def run_step_C2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
 
         headers, matched_key = find_best_template_match(category, template_dict)
 
+        headers, matched_key = find_best_template_match(category, template_dict)
+
         if not headers:
-            # 매칭 실패 시 기본 템플릿 적용
-            headers = ["Category", "Product Name", "SKU", "Brand", "Stock", "Weight"]
+            # ========================================
+            # 진단: 매칭 실패 원인 상세 분석
+            # ========================================
+            pid = variation or sku or f"ROW{r + 1}"
+            normalized_cat = normalize_category_path(category)
+            parts = normalized_cat.split('/') if normalized_cat else []
 
-            # 버킷 키는 정규화된 카테고리 기준
-            matched_key = normalize_category_path(category) or "unknown"
+            print(f"\n🚨 [MATCHING_FAILED] Row {r + 1} - PID: {pid}")
+            print(f"   원본 카테고리: '{category}'")
+            print(f"   정규화 결과: '{normalized_cat}'")
+            print(f"   분할 결과: {parts}")
 
+            print(f"   시도한 경로들:")
+            for depth in range(len(parts), 0, -1):
+                search_path = '/'.join(parts[:depth])
+                exists = "✅ 존재" if search_path in template_dict else "❌ 없음"
+                print(f"     - depth {depth}: '{search_path}' {exists}")
+
+            # TemplateDict 샘플 출력 (힌트 제공)
+            print(f"   TemplateDict 샘플 키 (처음 10개):")
+            for i, key in enumerate(list(template_dict.keys())[:10], 1):
+                print(f"     {i}. '{key}'")
+
+            # 🚫 기본 템플릿 사용 금지 - 해당 상품 건너뛰기
             failures.append([pid, category, pname, "TEMPLATE_NOT_FOUND",
-                             f"normalized={matched_key}"])
-            print(f"   [FALLBACK] Using default template for: {category}")
+                             f"normalized={normalized_cat}"])
+            print(f"   ❌ 상품 건너뛰기: 템플릿 매칭 실패")
+            continue  # 🔥 핵심: 기본 템플릿 대신 건너뛰기
 
         tem_row = [""] * len(headers)
         set_if_exists(headers, tem_row, "category", category)
