@@ -361,8 +361,8 @@ def run_step_1(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
 # ==============================================================================
 
 def run_step_2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
-    """Step 2: TEM_OUTPUT에 Mandatory 기본값 채우기 + 색칠"""
-    print("\n[ Automation ] Starting Step 2: Fill Mandatory Defaults...")
+    """Step 2: TEM_OUTPUT에 Mandatory 기본값 채우기 + 색칠 (중카테고리 매칭)"""
+    print("\n[ Automation ] Starting Step 2: Fill Mandatory Defaults (Mid-Category Matching)...")
 
     tem_name = get_tem_sheet_name()
     color_hex = get_env("COLOR_HEX_MANDATORY", "#FFF9C4")
@@ -373,6 +373,21 @@ def run_step_2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
     except WorksheetNotFound:
         print(f"[!] {tem_name} 탭 없음. Step1 선행 필요.");
         return
+
+    def _norm_cat_for_match(s: str) -> str:
+        """카테고리 정규화: 숫자 코드 제거 + 중카테고리 추출 + 소문자 변환"""
+        if not s: return ""
+        # 1단계: 숫자 코드 제거 (예: "100832 - " → "")
+        cleaned = re.sub(r'^\s*\d+\s*-\s*', '', str(s).strip())
+        # 2단계: 중카테고리 추출
+        mid_cat = mid_of_category(cleaned)
+        # 3단계: 정규화 (소문자 + 특수문자 처리)
+        normalized = mid_cat.lower()
+        normalized = normalized.replace(" - ", "/").replace("-", "/").replace("\\", "/")
+        normalized = "/".join(seg.strip() for seg in normalized.split("/") if seg.strip())
+        while "//" in normalized:
+            normalized = normalized.replace("//", "/")
+        return normalized
 
     def _read_defaults_ws(ws):
         vals = with_retry(lambda: ws.get_all_values()) or []
@@ -390,7 +405,8 @@ def run_step_2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
             attr = (row[a_idx] if a_idx < len(row) else "").strip()
             dval = (row[d_idx] if d_idx < len(row) else "").strip()
             if cat and attr:
-                out.setdefault((cat or "").strip().lower(), {})[header_key(attr)] = dval
+                # ✅ 수정: 정규화된 중카테고리 키 사용
+                out.setdefault(_norm_cat_for_match(cat), {})[header_key(attr)] = dval
         return out
 
     sheets = with_retry(lambda: ref.worksheets())
@@ -410,14 +426,15 @@ def run_step_2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
             cat_raw = (row[0] if len(row) > 0 else "").strip()
             if not cat_raw: continue
             mand_list = [hdr_keys[j] for j, cell in enumerate(row) if str(cell).strip().lower() == "mandatory"]
-            if mand_list: catprops_map[(cat_raw or "").strip().lower()] = mand_list
+            if mand_list:
+                # ✅ 수정: 정규화된 중카테고리 키 사용
+                catprops_map[_norm_cat_for_match(cat_raw)] = mand_list
 
     vals = with_retry(lambda: tem_ws.get_all_values()) or []
     if not vals: print("[!] TEM_OUTPUT 비어 있음."); return
 
     meta = with_retry(lambda: sh.fetch_sheet_metadata())
     sheet_id = next((s["properties"]["sheetId"] for s in meta["sheets"] if s["properties"]["title"] == tem_name), None)
-    if sheet_id is None: print("[!] 시트 ID 찾지 못함."); return
 
     updates: List[Cell] = []
     color_ranges_by_col = defaultdict(list)
@@ -433,13 +450,17 @@ def run_step_2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
         pid = (row[0] if len(row) > 0 else "").strip()
         cat_raw = (row[1] if len(row) > 1 else "").strip()
         if not pid or not cat_raw: continue
-        norm_cat = (cat_raw or "").strip().lower()
 
+        # ✅ 핵심 수정: 정규화된 중카테고리 키로 매칭
+        norm_cat = _norm_cat_for_match(cat_raw)
+
+        # mandatory 색칠
         if norm_cat in catprops_map:
             for attr_norm in catprops_map[norm_cat]:
                 j = _find_col_index(current_hdr_keys, attr_norm)
                 if j >= 0: color_ranges_by_col[j].append((r0, r0 + 1))
 
+        # 기본값 채우기
         if norm_cat in defaults_map:
             for attr_norm, dval in defaults_map[norm_cat].items():
                 if not dval: continue
@@ -467,16 +488,17 @@ def run_step_2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
         return merged
 
     requests = []
-    color = hex_to_rgb01(color_hex)
-    for j, spans in color_ranges_by_col.items():
-        for s, e in _merge(spans):
-            requests.append({"repeatCell": {
-                "range": {"sheetId": sheet_id, "startRowIndex": s, "endRowIndex": e, "startColumnIndex": 1 + j,
-                          "endColumnIndex": 1 + j + 1}, "cell": {"userEnteredFormat": {"backgroundColor": color}},
-                "fields": "userEnteredFormat.backgroundColor"}})
+    if sheet_id is not None:
+        color = hex_to_rgb01(color_hex)
+        for j, spans in color_ranges_by_col.items():
+            for s, e in _merge(spans):
+                requests.append({"repeatCell": {
+                    "range": {"sheetId": sheet_id, "startRowIndex": s, "endRowIndex": e, "startColumnIndex": 1 + j,
+                              "endColumnIndex": 1 + j + 1}, "cell": {"userEnteredFormat": {"backgroundColor": color}},
+                    "fields": "userEnteredFormat.backgroundColor"}})
 
-    if requests:
-        with_retry(lambda: sh.batch_update({"requests": requests}))
+        if requests:
+            with_retry(lambda: sh.batch_update({"requests": requests}))
 
     print("========== STEP 2 RESULT ==========")
     print(f"채워진 셀 수: {total_filled:,}")
