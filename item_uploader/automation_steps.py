@@ -3,7 +3,7 @@
 automation_steps_revised.py
 - Step 1부터 Step 7까지의 핵심 자동화 로직을 통합한 모듈입니다.
 - 각 함수는 main_controller.py에서 호출됩니다.
-- [완료] 대카테고리 기준 → 중카테고리 기준 전환
+- [완료] 3단계 우선순위 매칭 전략 (전체 경로 → 중카테고리 → 대카테고리)
 """
 
 from __future__ import annotations
@@ -55,6 +55,30 @@ def mid_of_category(s: str, depth: int = 2) -> str:
     if len(parts) <= depth:
         return "/".join(parts)
     return "/".join(parts[:depth])
+
+
+def generate_category_keys(category_raw: str) -> tuple[str, str, str]:
+    """
+    카테고리에서 전체/중간/상위 키를 모두 생성
+
+    Returns:
+        (full_key, mid_key, top_key)
+    """
+    if not category_raw:
+        return "", "", ""
+
+    # 숫자 코드 제거
+    cleaned = re.sub(r'^\s*\d+\s*-\s*', '', category_raw.strip())
+
+    # 슬래시 주변 공백 정규화 (중요!)
+    normalized = re.sub(r'\s*/\s*', '/', cleaned)
+
+    # 키 생성
+    full_key = header_key(normalized)  # 전체 경로
+    mid_key = header_key(mid_of_category(normalized))  # 중카테고리
+    top_key = header_key(top_of_category(normalized))  # 대카테고리
+
+    return full_key, mid_key, top_key
 
 
 def safe_sheet_name(category_name: str, max_length: int = 31) -> str:
@@ -148,12 +172,12 @@ def _append_failures(sh, rows: List[List[str]]):
 
 
 # ==============================================================================
-# STEP 1: TEM_OUTPUT 생성 (중카테고리 기준 전환)
+# STEP 1: TEM_OUTPUT 생성 (3단계 우선순위 매칭)
 # ==============================================================================
 
 def run_step_1(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
-    """Step 1: BASIC+MEDIA -> TEM_OUTPUT 생성 (+ SALES로 SKU/Parent SKU 매핑) [중카테고리 기준]"""
-    print("\n[ Automation ] Starting Step 1: Build TEM_OUTPUT (Mid-Category Based)...")
+    """Step 1: BASIC+MEDIA -> TEM_OUTPUT 생성 (+ SALES로 SKU/Parent SKU 매핑) [3단계 우선순위 매칭]"""
+    print("\n[ Automation ] Starting Step 1: Build TEM_OUTPUT (3-Level Priority Matching)...")
 
     basic_header = int(get_env("BASIC_HEADER_ROW", "2"))
     basic_first = int(get_env("BASIC_FIRST_DATA_ROW", "3"))
@@ -269,31 +293,38 @@ def run_step_1(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
             options.append((opt_name, img_val))
 
         # ========================================
-        # 핵심 변경: 중카테고리 기준 + 3단계 폴백
+        # 핵심 변경: 3단계 우선순위 매칭 전략
         # ========================================
-        mid_cat_raw = mid_of_category(cat)  # "Food & Beverages/Beverages"
-        mid_norm = header_key(mid_cat_raw or "")  # 정규화된 키
+        full_key, mid_key, top_key = generate_category_keys(cat)
 
-        # 1순위: 중카테고리 템플릿
-        headers = template_dict.get(mid_norm)
+        # 1순위: 전체 경로 매칭
+        headers = template_dict.get(full_key)
+        bucket_key = full_key
+        match_level = "FULL"
 
         if not headers:
-            # 2순위: 대카테고리 폴백 (기존 호환성)
-            top_norm = header_key(top_of_category(cat) or "")
-            headers = template_dict.get(top_norm)
+            # 2순위: 중카테고리 매칭
+            headers = template_dict.get(mid_key)
+            bucket_key = mid_key
+            match_level = "MID"
 
+        if not headers:
+            # 3순위: 대카테고리 매칭
+            headers = template_dict.get(top_key)
+            bucket_key = top_key
+            match_level = "TOP"
             if headers:
                 print(f"   [FALLBACK] Using top-level template for '{cat}'")
-            else:
-                # 3순위: 기본 템플릿
-                headers = ["Category", "Product Name", "SKU", "Brand", "Stock", "Weight"]
-                print(f"   [DEFAULT] Template not found for '{mid_cat_raw}'. Using default.")
-                failures.append(["", cat, pname, "TEMPLATE_NOT_FOUND", f"mid={mid_cat_raw}"])
+
+        if not headers:
+            # 4순위: 기본 템플릿
+            headers = ["Category", "Product Name", "SKU", "Brand", "Stock", "Weight"]
+            bucket_key = mid_key  # 실패시에도 중카테고리로 그룹핑
+            match_level = "DEFAULT"
+            print(f"   [DEFAULT] Template not found for '{cat}'. Using default.")
+            failures.append(["", cat, pname, "TEMPLATE_NOT_FOUND", f"keys=({full_key[:20]}..., {mid_key}, {top_key})"])
 
         psku_val = parent_sku_map.get(pid, "")
-
-        # 버킷 키를 중카테고리 기준으로 변경
-        bucket_key = mid_norm
 
         if not options:
             arr = [""] * len(headers)
@@ -361,8 +392,8 @@ def run_step_1(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
 # ==============================================================================
 
 def run_step_2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
-    """Step 2: TEM_OUTPUT에 Mandatory 기본값 채우기 + 색칠 (중카테고리 매칭)"""
-    print("\n[ Automation ] Starting Step 2: Fill Mandatory Defaults (Mid-Category Matching)...")
+    """Step 2: TEM_OUTPUT에 Mandatory 기본값 채우기 + 색칠 (3단계 우선순위 매칭)"""
+    print("\n[ Automation ] Starting Step 2: Fill Mandatory Defaults (3-Level Priority Matching)...")
 
     tem_name = get_tem_sheet_name()
     color_hex = get_env("COLOR_HEX_MANDATORY", "#FFF9C4")
@@ -375,19 +406,25 @@ def run_step_2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
         return
 
     def _norm_cat_for_match(s: str) -> str:
-        """카테고리 정규화: 숫자 코드 제거 + 중카테고리 추출 + 소문자 변환"""
+        """카테고리 정규화: 전체 경로 우선 → 중카테고리 폴백"""
         if not s: return ""
-        # 1단계: 숫자 코드 제거 (예: "100832 - " → "")
+
+        # 1단계: 숫자 코드 제거
         cleaned = re.sub(r'^\s*\d+\s*-\s*', '', str(s).strip())
-        # 2단계: 중카테고리 추출
-        mid_cat = mid_of_category(cleaned)
-        # 3단계: 정규화 (소문자 + 특수문자 처리)
-        normalized = mid_cat.lower()
-        normalized = normalized.replace(" - ", "/").replace("-", "/").replace("\\", "/")
-        normalized = "/".join(seg.strip() for seg in normalized.split("/") if seg.strip())
-        while "//" in normalized:
-            normalized = normalized.replace("//", "/")
-        return normalized
+
+        # 2단계: 슬래시 주변 공백 정규화 (핵심!)
+        normalized = re.sub(r'\s*/\s*', '/', cleaned)
+
+        # 3단계: 소문자 변환 및 특수문자 처리
+        result = normalized.lower()
+        result = result.replace(" - ", "/").replace("-", "/").replace("\\", "/")
+        result = "/".join(seg.strip() for seg in result.split("/") if seg.strip())
+
+        # 중복 슬래시 제거
+        while "//" in result:
+            result = result.replace("//", "/")
+
+        return result
 
     def _read_defaults_ws(ws):
         vals = with_retry(lambda: ws.get_all_values()) or []
@@ -405,7 +442,6 @@ def run_step_2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
             attr = (row[a_idx] if a_idx < len(row) else "").strip()
             dval = (row[d_idx] if d_idx < len(row) else "").strip()
             if cat and attr:
-                # ✅ 수정: 정규화된 중카테고리 키 사용
                 out.setdefault(_norm_cat_for_match(cat), {})[header_key(attr)] = dval
         return out
 
@@ -427,7 +463,6 @@ def run_step_2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
             if not cat_raw: continue
             mand_list = [hdr_keys[j] for j, cell in enumerate(row) if str(cell).strip().lower() == "mandatory"]
             if mand_list:
-                # ✅ 수정: 정규화된 중카테고리 키 사용
                 catprops_map[_norm_cat_for_match(cat_raw)] = mand_list
 
     vals = with_retry(lambda: tem_ws.get_all_values()) or []
@@ -451,18 +486,28 @@ def run_step_2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
         cat_raw = (row[1] if len(row) > 1 else "").strip()
         if not pid or not cat_raw: continue
 
-        # ✅ 핵심 수정: 정규화된 중카테고리 키로 매칭
-        norm_cat = _norm_cat_for_match(cat_raw)
+        # 우선순위 매칭: 전체 → 중카테고리
+        full_key, mid_key, top_key = generate_category_keys(cat_raw)
 
-        # mandatory 색칠
-        if norm_cat in catprops_map:
-            for attr_norm in catprops_map[norm_cat]:
+        # mandatory 색칠 (전체 경로 우선)
+        matched_props = catprops_map.get(full_key, [])
+        if not matched_props:
+            matched_props = catprops_map.get(mid_key, [])
+
+        if matched_props:
+            for attr_norm in matched_props:
                 j = _find_col_index(current_hdr_keys, attr_norm)
                 if j >= 0: color_ranges_by_col[j].append((r0, r0 + 1))
 
+        # 전체 경로 우선 매칭
+        matched_defaults = defaults_map.get(full_key, {})
+        if not matched_defaults:
+            # 중카테고리 폴백
+            matched_defaults = defaults_map.get(mid_key, {})
+
         # 기본값 채우기
-        if norm_cat in defaults_map:
-            for attr_norm, dval in defaults_map[norm_cat].items():
+        if matched_defaults:
+            for attr_norm, dval in matched_defaults.items():
                 if not dval: continue
                 j = _find_col_index(current_hdr_keys, attr_norm)
                 if j < 0: continue
