@@ -314,34 +314,47 @@ def run_step_1(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
         # ========================================
         # 핵심 변경: 3단계 우선순위 매칭 전략
         # ========================================
-        full_key, mid_key, top_key = generate_category_keys(cat)
 
-        # 1순위: 전체 경로 매칭
-        headers = template_dict.get(full_key)
-        bucket_key = full_key
-        match_level = "FULL"
+        # 1. 카테고리 경로 분할 및 정규화
+        cleaned_cat = re.sub(r'^\s*\d+\s*-\s*', '', cat.strip())
+        normalized_cat = re.sub(r'\s*/\s*', '/', cleaned_cat)
+        parts = [p.strip() for p in normalized_cat.split('/') if p.strip()]
 
+        headers = None
+        bucket_key = ""
+        match_level = ""
+
+        # 2. 가장 깊은 경로부터 최상위까지 순차 검색
+        # 예: A/B/C/D -> A/B/C -> A/B -> A 순서로 시도
+        for i in range(len(parts), 0, -1):
+            sub_path = "/".join(parts[:i])
+            key = header_key(sub_path)
+
+            if key in template_dict:
+                headers = template_dict[key]
+                bucket_key = key
+                match_level = f"DEPTH_{i}"
+                if i < len(parts):
+                    print(f"   [MATCH] Found template at depth {i}: {sub_path}")
+                break
+
+        # 3. 매칭 실패 시 기본 템플릿 적용
         if not headers:
-            # 2순위: 중카테고리 매칭
-            headers = template_dict.get(mid_key)
-            bucket_key = mid_key
-            match_level = "MID"
-
-        if not headers:
-            # 3순위: 대카테고리 매칭
-            headers = template_dict.get(top_key)
-            bucket_key = top_key
-            match_level = "TOP"
-            if headers:
-                print(f"   [FALLBACK] Using top-level template for '{cat}'")
-
-        if not headers:
-            # 4순위: 기본 템플릿
             headers = ["Category", "Product Name", "SKU", "Brand", "Stock", "Weight"]
-            bucket_key = mid_key  # 실패시에도 중카테고리로 그룹핑
+
+            # 버킷 키는 중카테고리(depth=2) 기준으로 그룹화 유지
+            if len(parts) >= 2:
+                fallback_path = "/".join(parts[:2])
+            elif len(parts) == 1:
+                fallback_path = parts[0]
+            else:
+                fallback_path = "UNKNOWN"
+
+            bucket_key = header_key(fallback_path)
             match_level = "DEFAULT"
-            print(f"   [DEFAULT] Template not found for '{cat}'. Using default.")
-            failures.append(["", cat, pname, "TEMPLATE_NOT_FOUND", f"keys=({full_key[:20]}..., {mid_key}, {top_key})"])
+
+            print(f"   [DEFAULT] Template not found for '{cat}'. Scanned {len(parts)} levels.")
+            failures.append(["", cat, pname, "TEMPLATE_NOT_FOUND", f"scanned_levels={len(parts)}"])
 
         psku_val = parent_sku_map.get(pid, "")
 
