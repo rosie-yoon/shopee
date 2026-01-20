@@ -300,11 +300,22 @@ def run_step_C2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
 
         headers, matched_key = find_best_template_match(category, template_dict)
 
+        if not category:
+            pid = variation or sku or f"ROW{r + 1}"
+            failures.append([pid, "", pname, "CATEGORY_MISSING", f"row={r + 1}"])
+            continue
+
+        # ========================================
+        # 핵심 수정: 3단계 우선순위 매칭 적용
+        # ========================================
+        pid = variation or sku or f"ROW{r + 1}"
+
+        headers, matched_key = find_best_template_match(category, template_dict)
+
         if not headers:
             # ========================================
             # 진단: 매칭 실패 원인 상세 분석
             # ========================================
-            pid = variation or sku or f"ROW{r + 1}"
             normalized_cat = normalize_category_path(category)
             parts = normalized_cat.split('/') if normalized_cat else []
 
@@ -320,16 +331,25 @@ def run_step_C2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
                 print(f"     - depth {depth}: '{search_path}' {exists}")
 
             # TemplateDict 샘플 출력 (힌트 제공)
-            print(f"   TemplateDict 샘플 키 (처음 10개):")
-            for i, key in enumerate(list(template_dict.keys())[:10], 1):
+            print(f"   TemplateDict 샘플 키 (처음 5개):")
+            for i, key in enumerate(list(template_dict.keys())[:5], 1):
                 print(f"     {i}. '{key}'")
 
-            # 🚫 기본 템플릿 사용 금지 - 해당 상품 건너뛰기
+            # 🔥 핵심 변경: continue 대신 C5 호환 기본 템플릿 사용
+            headers = [
+                "Category", "Product Name", "Product Description", "SKU", "Parent SKU",
+                "Variation Integration", "Variation Name1", "Option for Variation 1",
+                "Image per variation", "Cover Image", "Item Image 1", "Item Image 2",
+                "Item Image 3", "Item Image 4", "Item Image 5", "Brand", "Stock",
+                "Weight", "Days to ship", "Global SKU Price"
+            ]
+            matched_key = normalized_cat or "unknown"
+
             failures.append([pid, category, pname, "TEMPLATE_NOT_FOUND",
                              f"normalized={normalized_cat}"])
-            print(f"   ❌ 상품 건너뛰기: 템플릿 매칭 실패")
-            continue  # 🔥 핵심: 기본 템플릿 대신 건너뛰기
+            print(f"   ⚠️ C5 호환 기본 템플릿을 적용합니다.")
 
+        # 템플릿 행 생성 (이 부분은 기존과 동일)
         tem_row = [""] * len(headers)
         set_if_exists(headers, tem_row, "category", category)
         set_if_exists(headers, tem_row, "product name", pname)
@@ -340,7 +360,6 @@ def run_step_C2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
         set_if_exists(headers, tem_row, "sku", sku)
         set_if_exists(headers, tem_row, "brand", brand)
 
-        pid = variation or sku or f"ROW{r + 1}"
         # 버킷 키는 매칭된 정규화 키 사용
         b = buckets.setdefault(matched_key, {"headers": headers, "pids": [], "rows": []})
         b["pids"].append([pid])
