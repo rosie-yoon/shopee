@@ -2,9 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 [V_20250120_RECURSIVE_MATCHING] 신규 상품 템플릿 생성 파이프라인
-- C2: 완전 재귀 매칭 전략 적용 (automation_steps_revised.py Step 1 로직 이식)
-- C3: FDA 카테고리 정규화 강화
-- C4, C5: 완전한 구현 추가
+- C2: 완전 재귀 매칭 전략 + C5 호환 기본 템플릿 적용
+- C3~C6: 기존 로직 유지 + 필수 기능 완전 구현
 """
 from __future__ import annotations
 
@@ -30,47 +29,39 @@ from .utils_common import join_url, forward_fill_by_group
 
 
 # ==============================================================================
-# [NEW] 중카테고리 & 시트명 유틸 (automation_steps와 로직 통일)
+# [NEW] 카테고리 경로 생성 헬퍼 함수
 # ==============================================================================
 
-def mid_of_category(s: str, depth: int = 2) -> str:
-    """카테고리 경로에서 중카테고리(depth=2)까지만 추출"""
-    if not s or not isinstance(s, str):
-        return ""
-    # 숫자 코드 제거
-    cleaned = s.strip()
-    cleaned = re.sub(r'^\s*\d+\s*-\s*', '', cleaned)
-    # 슬래시로 분할하여 중카테고리 추출
-    parts = [p.strip() for p in cleaned.split("/") if p.strip()]
-    if len(parts) <= depth:
-        return "/".join(parts)
-    return "/".join(parts[:depth])
+def _generate_category_paths(category_raw: str) -> List[str]:
+    """
+    카테고리에서 가장 깊은 경로부터 상위 경로까지 순차 생성
 
+    예: "100782 - Food & Beverages/Cooking Essentials/Seasonings & Condiments/Sauce"
+    → ["Food & Beverages/Cooking Essentials/Seasonings & Condiments/Sauce",
+       "Food & Beverages/Cooking Essentials/Seasonings & Condiments",
+       "Food & Beverages/Cooking Essentials",
+       "Food & Beverages"]
+    """
+    if not category_raw:
+        return []
 
-def safe_sheet_name(category_name: str, max_length: int = 31) -> str:
-    """Excel 시트명 제약 조건을 만족하도록 카테고리명 변환"""
-    if not category_name:
-        return "UNKNOWN"
-    # 특수문자를 언더스코어로 치환
-    clean_name = re.sub(r'[\\/*?:\[\]&]', '_', str(category_name))
-    clean_name = clean_name.replace(' ', '_')
-    clean_name = re.sub(r'_+', '_', clean_name)
-    clean_name = clean_name.strip('_')
+    # 1) 숫자 코드 제거 (예: "100782 - " → "")
+    cleaned = re.sub(r'^\s*\d+\s*-\s*', '', category_raw.strip())
 
-    if len(clean_name) <= max_length:
-        return clean_name
+    # 2) 슬래시 주변 공백 정규화 (핵심!)
+    normalized = re.sub(r'\s*/\s*', '/', cleaned)
 
-    # 스마트 축약: 마지막 부분(세부 카테고리) 우선 보존
-    parts = clean_name.split('_')
-    if len(parts) >= 2:
-        first_part = parts[0][:10]
-        remaining_length = max_length - len(first_part) - 1
-        last_parts = '_'.join(parts[1:])
-        if len(last_parts) <= remaining_length:
-            return f"{first_part}_{last_parts}"
-        else:
-            return f"{first_part}_{last_parts[:remaining_length]}"
-    return clean_name[:max_length]
+    # 3) 파츠 분해 및 경로 생성
+    parts = [p.strip() for p in normalized.split('/') if p.strip()]
+    if not parts:
+        return []
+
+    # 4) 가장 깊은 경로부터 상위 경로까지
+    paths: List[str] = []
+    for i in range(len(parts), 0, -1):
+        sub_path = "/".join(parts[:i])
+        paths.append(sub_path)
+    return paths
 
 
 # ==============================================================================
@@ -140,27 +131,6 @@ def _load_template_dict(ref: gspread.Spreadsheet) -> Dict[str, List[str]]:
     return out
 
 
-def _append_failures(sh: gspread.Spreadsheet, rows: List[List[str]]):
-    """Failures 탭에 rows를 append. 공간 부족 시 자동 resize."""
-    if not rows:
-        return
-    try:
-        ws = safe_worksheet(sh, "Failures")
-        vals = with_retry(lambda: ws.get_all_values()) or []
-        start_row = len(vals) + 1
-        end_row = start_row + len(rows) - 1
-
-        if end_row > ws.row_count:
-            with_retry(lambda: ws.resize(rows=end_row + 100, cols=max(ws.col_count, 10)))
-
-        with_retry(lambda: ws.update(values=rows, range_name=f"A{start_row}"))
-
-    except WorksheetNotFound:
-        ws = with_retry(lambda: sh.add_worksheet(title="Failures", rows=1000, cols=10))
-        header = [["PID", "Category", "Name", "Reason", "Detail"]]
-        with_retry(lambda: ws.update(values=header + rows, range_name="A1"))
-
-
 # ==============================================================================
 # C1: TEM_OUTPUT 시트 준비/초기화
 # ==============================================================================
@@ -208,8 +178,8 @@ def _is_true(v: str) -> bool:
 def run_step_C2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
     """
     [V_20250120_RECURSIVE_MATCHING] Collection → TEM_OUTPUT 생성
-    - automation_steps_revised.py Step 1의 완전 재귀 매칭 전략 이식
-    - 가장 깊은 경로부터 최상위까지 순차 검색하여 최적 템플릿 매칭
+    - 완전 재귀 매칭 전략 적용 (깊은 경로 → 얕은 경로)
+    - 매칭 실패 시 C5 호환 기본 템플릿 사용 (RuntimeError 방지)
     """
     print("\n[ Create ] Step C2: Build TEM from Collection (Recursive Matching)...")
     tem_name = get_tem_sheet_name()
@@ -270,57 +240,49 @@ def run_step_C2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
             failures.append([pid, "", pname, "CATEGORY_MISSING", f"row={r + 1}"])
             continue
 
-        # ========================================
-        # 핵심 개선: 완전 재귀 매칭 전략 (automation_steps_revised.py 이식)
-        # ========================================
-
-        # 1. 카테고리 경로 분할 및 정규화
-        cleaned_cat = re.sub(r'^\s*\d+\s*-\s*', '', category.strip())
-        normalized_cat = re.sub(r'\s*/\s*', '/', cleaned_cat)
-        parts = [p.strip() for p in normalized_cat.split('/') if p.strip()]
-
+        # ================================
+        # [개선] 완전 재귀 카테고리 매칭
+        # ================================
         headers = None
         bucket_key = ""
-        match_level = ""
+        tried_paths: List[str] = []
 
-        # 2. 가장 깊은 경로부터 최상위까지 순차 검색
-        # 예: A/B/C/D -> A/B/C -> A/B -> A 순서로 시도
-        for i in range(len(parts), 0, -1):
-            sub_path = "/".join(parts[:i])
-            key = header_key(sub_path)
+        # 가장 깊은 경로부터 상위 경로까지 순차 검색
+        for path in _generate_category_paths(category):
+            key = header_key(path)
+            tried_paths.append(path)
 
             if key in template_dict:
                 headers = template_dict[key]
                 bucket_key = key
-                match_level = f"DEPTH_{i}"
-                if i < len(parts):
-                    print(f"   [MATCH] Found template at depth {i}: {sub_path}")
+                if len(tried_paths) > 1:
+                    print(f"   [MATCH] Found template at: {path}")
                 break
 
-        # 3. 매칭 실패 시 기본 템플릿 적용
+        # 매칭 실패 시 C5 호환 기본 템플릿 사용 (필수 컬럼 포함)
         if not headers:
-            headers = ["Category", "Product Name", "SKU", "Brand", "Stock", "Weight"]
+            headers = [
+                "Category", "Product Name", "Product Description",
+                "Variation Integration", "Parent SKU", "SKU",
+                "Variation Name 1", "Option for Variation 1",
+                "Price", "Stock", "Weight", "Brand",
+                "Cover Image", "Image Per Variation",
+                "Item Image 1", "Item Image 2", "Item Image 3"
+            ]
+            bucket_key = header_key(top_of_category(category) or "UNKNOWN")
+            print(f"   [DEFAULT] Template not found for '{category}'. Using enhanced default.")
+            failures.append([
+                "", category, pname, "TEMPLATE_NOT_FOUND",
+                f"tried_paths={' -> '.join(tried_paths[:3])}..."
+            ])
 
-            # 버킷 키는 중카테고리(depth=2) 기준으로 그룹화 유지
-            if len(parts) >= 2:
-                fallback_path = "/".join(parts[:2])
-            elif len(parts) == 1:
-                fallback_path = parts[0]
-            else:
-                fallback_path = "UNKNOWN"
-
-            bucket_key = header_key(fallback_path)
-            match_level = "DEFAULT"
-
-            print(f"   [DEFAULT] Template not found for '{category}'. Scanned {len(parts)} levels.")
-            failures.append(["", category, pname, "TEMPLATE_NOT_FOUND", f"scanned_levels={len(parts)}"])
-
-        # 4. TEM 행 생성
+        # TEM 행 생성
         tem_row = [""] * len(headers)
         set_if_exists(headers, tem_row, "category", category)
         set_if_exists(headers, tem_row, "product name", pname)
         set_if_exists(headers, tem_row, "product description", desc)
         set_if_exists(headers, tem_row, "variation integration", variation)
+        set_if_exists(headers, tem_row, "parent sku", variation)
         set_if_exists(headers, tem_row, "variation name1", "Options")
         set_if_exists(headers, tem_row, "option for variation 1", opt1)
         set_if_exists(headers, tem_row, "sku", sku)
@@ -331,7 +293,7 @@ def run_step_C2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
         b["pids"].append([pid])
         b["rows"].append(tem_row)
 
-    # 5. TEM_OUTPUT 시트에 출력
+    # TEM_OUTPUT 시트에 출력
     out_matrix: List[List[str]] = []
     for _, pack in buckets.items():
         out_matrix.append(["PID"] + pack["headers"])
@@ -346,7 +308,14 @@ def run_step_C2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
         with_retry(lambda: tem_ws.update(values=out_matrix, range_name=f"A1:{end_a1}"))
 
     if failures:
-        _append_failures(sh, failures)
+        # Failures 기록
+        try:
+            ws = safe_worksheet(sh, "Failures")
+            vals = with_retry(lambda: ws.get_all_values()) or []
+            start_row = len(vals) + 1
+            with_retry(lambda: ws.update(values=failures, range_name=f"A{start_row}"))
+        except Exception:
+            pass
 
     print("========== STEP C2 RESULT ==========")
     print(f"TEM 생성 행수: {len(out_matrix) - len(buckets):,}")
@@ -355,47 +324,24 @@ def run_step_C2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
 
 
 # ==============================================================================
-# C3: FDA Registration No. 채우기 (카테고리 정규화 강화)
+# C3: FDA Registration No. 채우기
 # ==============================================================================
 
 def run_step_C3_fda(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet, overwrite: bool = False):
     """
-    [V_20250120_NORMALIZED_MATCHING] FDA 코드 채우기
-    - 카테고리 정규화 로직 강화 (공백/특수문자 처리)
+    (STEP 3 이식) Reference 시트의 목록을 기준으로, TEM_OUTPUT 행에 고정 FDA 코드를 채웁니다.
     """
-    print("\n[ Create ] Step C3: Fill FDA Code (Normalized Matching)...")
+    print("\n[ Create ] Step C3: Fill FDA Code (STEP 3)...")
 
     tem_name = get_tem_sheet_name()
     fda_sheet_name = get_env("FDA_CATEGORIES_SHEET_NAME", "TH Cos")
     fda_header = get_env("FDA_HEADER_NAME", "FDA Registration No.")
     FDA_CODE = "10-1-9999999"
 
-    def _normalize_category(s: str) -> str:
-        """카테고리 정규화: 숫자 코드 제거 + 공백/특수문자 처리"""
-        if not s: return ""
-        # 1단계: 숫자 코드 제거
-        cleaned = re.sub(r'^\s*\d+\s*-\s*', '', str(s).strip())
-        # 2단계: 슬래시 주변 공백 정규화
-        normalized = re.sub(r'\s*/\s*', '/', cleaned)
-        # 3단계: 소문자 변환
-        result = normalized.lower()
-        # 4단계: 특수문자 처리
-        result = result.replace(" - ", "/").replace("-", "/").replace("\\", "/")
-        result = "/".join(seg.strip() for seg in result.split("/") if seg.strip())
-        # 중복 슬래시 제거
-        while "//" in result:
-            result = result.replace("//", "/")
-        return result
-
     try:
         fda_ws = safe_worksheet(ref, fda_sheet_name)
         fda_vals_2d = with_retry(lambda: fda_ws.get_values('A:A', value_render_option='UNFORMATTED_VALUE'))
-        # 정규화된 카테고리 목록 생성
-        target_categories = {
-            _normalize_category(str(r[0]))
-            for r in (fda_vals_2d or [])
-            if r and str(r[0]).strip()
-        }
+        target_categories = {str(r[0]).strip().lower() for r in (fda_vals_2d or []) if r and str(r[0]).strip()}
     except Exception as e:
         print(f"[!] '{fda_sheet_name}' 탭을 읽는 데 실패했습니다: {e}. Step C3을 건너뜁니다.")
         return
@@ -408,12 +354,10 @@ def run_step_C3_fda(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet, overwrite
         return
 
     if not vals:
-        print("[!] TEM_OUTPUT 비어 있음.")
         return
 
     updates: List[Cell] = []
     current_keys, col_category_B, col_fda_B = None, -1, -1
-    updated_rows = 0
 
     for r0, row in enumerate(vals):
         if (row[1] if len(row) > 1 else "").strip().lower() == "category":
@@ -429,7 +373,7 @@ def run_step_C3_fda(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet, overwrite
             continue
 
         category_val_raw = (row[col_category_B + 1] if len(row) > (col_category_B + 1) else "").strip()
-        category_val_normalized = _normalize_category(category_val_raw)
+        category_val_normalized = category_val_raw.lower()
 
         if category_val_normalized and category_val_normalized in target_categories:
             c_fda_sheet_col = col_fda_B + 2
@@ -437,18 +381,17 @@ def run_step_C3_fda(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet, overwrite
 
             if not cur_fda or overwrite:
                 updates.append(Cell(row=r0 + 1, col=c_fda_sheet_col, value=FDA_CODE))
-                updated_rows += 1
 
     if updates:
         with_retry(lambda: tem_ws.update_cells(updates, value_input_option="RAW"))
 
     print(f"========== STEP C3 FDA RESULT ==========")
-    print(f"적용된 셀 수: {updated_rows:,}")
+    print(f"적용된 셀 수: {len(updates):,}")
     print("Step C3: Fill FDA Code Finished.")
 
 
 # ==============================================================================
-# C4: MARGIN → TEM 가격 매핑 (완전 구현)
+# C4: MARGIN → TEM 가격 매핑
 # ==============================================================================
 
 def run_step_C4_prices(sh: gspread.Spreadsheet):
@@ -524,7 +467,7 @@ def run_step_C4_prices(sh: gspread.Spreadsheet):
 
 
 # ==============================================================================
-# C5: 이미지 URL 채우기 (완전 구현)
+# C5: 이미지 URL 채우기
 # ==============================================================================
 
 def run_step_C5_images(
@@ -565,7 +508,7 @@ def run_step_C5_images(
     idx_t_details: List[int] = []
 
     # Collection에서 Details Index 정보 읽기
-    details_count_map: Dict[str, int] = {}  # Parent SKU → Details 개수
+    details_count_map: Dict[str, int] = {}
     try:
         coll_ws = safe_worksheet(sh, "Collection")
         coll_vals = with_retry(lambda: coll_ws.get_all_values()) or []
@@ -595,7 +538,7 @@ def run_step_C5_images(
             idx_t_cover = _find_col_index(cur_headers, "coverimage")
             idx_t_opt_img = _find_col_index(cur_headers, "imagepervariation", ["option image"])
 
-            # Details Image 컬럼 찾기 (Item Image 1~9)
+            # Details Image 컬럼 찾기
             idx_t_details = []
             for i in range(1, 10):
                 idx = _find_col_index(cur_headers, f"itemimage{i}")
@@ -621,7 +564,7 @@ def run_step_C5_images(
             opt_url = f"{option_base_url}{sku}_O_{shop_code}.jpg"
             updates.append(Cell(row=r0 + 1, col=idx_t_opt_img + 2, value=opt_url))
 
-        # Details Images (Parent SKU 기준, Details Index 개수만큼)
+        # Details Images (Parent SKU 기준)
         if idx_t_details and psku:
             detail_count = details_count_map.get(psku, 0)
             for i, idx in enumerate(idx_t_details, start=1):
@@ -638,7 +581,7 @@ def run_step_C5_images(
 
 
 # ==============================================================================
-# C6: Stock/Weight/Brand 보정 (Weight 채우기 STEP 4 이식)
+# C6: Stock/Weight/Brand 보정
 # ==============================================================================
 
 def run_step_C6_stock_weight_brand(sh: gspread.Spreadsheet):
@@ -646,7 +589,7 @@ def run_step_C6_stock_weight_brand(sh: gspread.Spreadsheet):
     Step C6: Stock, Weight, Brand 채우기
     - Stock: 1000 (고정)
     - Brand: 0 (고정)
-    - Weight: MARGIN 시트의 SKU 매핑 (automation_steps_revised.py STEP 4 로직)
+    - Weight: MARGIN 시트의 SKU 매핑
     """
     print("\n[ Create ] Step C6: Fill Stock, Weight, Brand (Weight STEP 4)...")
     tem_name = get_tem_sheet_name()
@@ -656,7 +599,7 @@ def run_step_C6_stock_weight_brand(sh: gspread.Spreadsheet):
         print("[C6] TEM_OUTPUT 비어 있음.")
         return
 
-    # 1) MARGIN 시트 로드 (SKU ↔ Weight)
+    # MARGIN 시트 로드 (SKU ↔ Weight)
     sku_to_weight: Dict[str, str] = {}
     try:
         mg_ws = safe_worksheet(sh, "MARGIN")
@@ -677,7 +620,7 @@ def run_step_C6_stock_weight_brand(sh: gspread.Spreadsheet):
     except Exception as e:
         print(f"[C6] MARGIN 처리 중 오류: {e}. Weight 매핑 건너뜀.")
 
-    # 2) TEM에서 블록별 헤더 탐지 후 Stock, Weight, Brand, SKU 인덱스 찾아 채움
+    # TEM에서 블록별 헤더 탐지 후 채움
     updates: List[Cell] = []
     cur_headers = None
     idx_t_sku = idx_t_stock = idx_t_weight = idx_t_brand = -1
@@ -734,9 +677,6 @@ def run_step_C6_stock_weight_brand(sh: gspread.Spreadsheet):
 class ShopeeCreator:
     """
     [V_20250120_RECURSIVE_MATCHING] 신규 상품 템플릿 생성 파이프라인 컨트롤러
-    - C2: 완전 재귀 매칭 전략 적용
-    - C3: FDA 카테고리 정규화 강화
-    - C4, C5: 완전한 구현 추가
     """
 
     def __init__(self, sheet_url: str, ref_url: Optional[str] = None) -> None:
@@ -749,15 +689,10 @@ class ShopeeCreator:
         self.sh: Optional[gspread.Spreadsheet] = None
         self.ref: Optional[gspread.Spreadsheet] = None
 
-        # main_controller.py에서 주입되는 속성들
         self.shop_code: Optional[str] = None
         self.cover_base_url: Optional[str] = None
         self.details_base_url: Optional[str] = None
         self.option_base_url: Optional[str] = None
-
-    # ----------------------------------------------------------
-    # 내부 유틸
-    # ----------------------------------------------------------
 
     def _connect(self) -> None:
         """gspread 인증 및 대상/레퍼런스 스프레드시트 오픈"""
@@ -793,16 +728,12 @@ class ShopeeCreator:
         except Exception as e:
             print(f"[WARN] Failures 시트 초기화 실패: {e}")
 
-    # ----------------------------------------------------------
-    # 실행
-    # ----------------------------------------------------------
     def run(self) -> bool:
         """
         실행 전체 파이프라인:
           C1 → C2 → C3 (FDA) → C4 → C5 → C6
         """
         try:
-            # 인증 및 시트 연결
             self._connect()
             assert self.sh is not None
             if not self.ref:
@@ -833,14 +764,9 @@ class ShopeeCreator:
             traceback.print_exc()
             return False
 
-    # ----------------------------------------------------------
-    # 엑셀 다운로드 (xlsx) - 중카테고리 기준 분할
-    # ----------------------------------------------------------
-
     def get_tem_values_xlsx(self) -> Optional[BytesIO]:
         """
-        [STEP 7 이식] TEM_OUTPUT 시트를 중카테고리 단위로 분할하여 엑셀(xlsx) 파일로 반환합니다.
-        - A열 PID 제거, Category 형식 정규화 조건 반영, 오토 포맷 적용.
+        TEM_OUTPUT 시트를 중카테고리 단위로 분할하여 엑셀(xlsx) 파일로 반환
         """
         if not self.sh:
             return None
@@ -886,7 +812,7 @@ class ShopeeCreator:
                 header_row = df.iloc[header_index, 1:]
                 chunk_df = df.iloc[start_row:end_row, 1:].copy()
 
-                # Category 정규화 (숫자 코드 제거)
+                # Category 정규화
                 if not chunk_df.empty and chunk_df.shape[1] > 0 and header_key(header_row.iloc[0]) == "category":
                     chunk_df.iloc[:, 0] = chunk_df.iloc[:, 0].astype(str).str.replace(r"\s*-\s*", "-", regex=True)
 
@@ -898,15 +824,22 @@ class ShopeeCreator:
                         columns = columns[: chunk_df.shape[1]]
                 chunk_df.columns = columns
 
-                # ========================================
-                # 핵심 변경: 중카테고리 기준 시트명 생성
-                # ========================================
+                # 중카테고리 기준 시트명 생성
+                def _mid_of_category(s: str, depth: int = 2) -> str:
+                    if not s: return ""
+                    cleaned = re.sub(r'^\s*\d+\s*-\s*', '', s.strip())
+                    parts = [p.strip() for p in cleaned.split("/") if p.strip()]
+                    return "/".join(parts[:depth]) if len(parts) > depth else "/".join(parts)
+
                 cat_col_name = next((c for c in columns if c.lower() == "category"), None)
                 first_cat = str(chunk_df.iloc[0][cat_col_name]) if (cat_col_name and not chunk_df.empty) else "UNKNOWN"
 
-                # 중카테고리 기준으로 시트명 생성
-                mid_level_name = mid_of_category(first_cat) or "UNKNOWN"
-                sheet_name = safe_sheet_name(mid_level_name)
+                mid_level_name = _mid_of_category(first_cat) or "UNKNOWN"
+
+                # 시트명 생성
+                clean_name = re.sub(r'[\\/*?:\[\]&]', '_', str(mid_level_name))
+                clean_name = re.sub(r'_+', '_', clean_name.replace(' ', '_')).strip('_')
+                sheet_name = clean_name[:31]
 
                 chunk_df.to_excel(writer, sheet_name=sheet_name, index=False)
 
@@ -916,32 +849,25 @@ class ShopeeCreator:
                     if ws:
                         try:
                             ws.freeze_panes(1, 0)
-                        except Exception:
+                        except:
                             pass
                         try:
-                            widths = [
-                                max(9, min(60, int(chunk_df[col].astype(str).map(len).max() or 0) + 2))
-                                for col in chunk_df.columns
-                            ]
+                            widths = [max(9, min(60, int(chunk_df[col].astype(str).map(len).max() or 0) + 2)) for col in
+                                      chunk_df.columns]
                             for col_idx, width in enumerate(widths):
                                 ws.set_column(col_idx, col_idx, width)
-                        except Exception:
+                        except:
                             pass
-                except Exception:
+                except:
                     pass
 
         output.seek(0)
         print("Final template file generated successfully (xlsx/Mid-Category).")
         return output
 
-    # ----------------------------------------------------------
-    # CSV Export (main_controller가 fallback으로 사용)
-    # ----------------------------------------------------------
-
     def get_tem_values_csv(self) -> Optional[bytes]:
         """
-        [main_controller가 사용하는 공식 CSV 다운로드 함수]
-        - A열 PID 제거 및 Category 정규화 로직이 포함된 최신 버전입니다.
+        main_controller가 사용하는 공식 CSV 다운로드 함수
         """
         if not self.sh:
             return None
