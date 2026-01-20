@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from typing import List, Dict, Optional, Any, Tuple
+from typing import List, Dict, Optional, Any
 import io
 import csv
 import re
@@ -29,81 +29,7 @@ from .utils_common import get_env, join_url, forward_fill_by_group
 
 # === automation_steps.py 공통 헬퍼 함수 이식 ===
 
-# ========================================
-# [NEW] 카테고리 정규화 및 3단계 매칭 함수
-# ========================================
-
-def normalize_category_path(category: str) -> str:
-    """
-    카테고리 경로 정규화 (계층 구조 보존)
-
-    Args:
-        category: 원본 카테고리 문자열
-
-    Returns:
-        정규화된 카테고리 경로
-
-    Examples:
-        >>> normalize_category_path("100832 - Beauty / Makeup / Lips")
-        "beauty/makeup/lips"
-        >>> normalize_category_path("Beauty - Makeup")
-        "beauty/makeup"
-    """
-    if not category or not isinstance(category, str):
-        return ""
-
-    # 1. Shopee 숫자 코드 제거 (예: "100832 - " 삭제)
-    cleaned = re.sub(r'^\s*\d+\s*-\s*', '', category.strip())
-
-    # 2. 구분자 통일
-    cleaned = cleaned.replace('\\', '/')  # 백슬래시 → 슬래시
-    cleaned = re.sub(r'\s+-\s+', '/', cleaned)  # " - " → "/"
-    cleaned = re.sub(r'\s*/\s*', '/', cleaned)  # " / " → "/"
-
-    # 3. 세그먼트별 공백 제거 및 소문자 변환
-    segments = [seg.strip().lower() for seg in cleaned.split('/') if seg.strip()]
-
-    # 4. 최종 경로 생성
-    result = '/'.join(segments)
-
-    # 5. 중복 슬래시 제거
-    while '//' in result:
-        result = result.replace('//', '/')
-
-    return result.strip('/')
-
-
-def find_best_template_match(category: str, template_dict: Dict[str, List[str]]) -> Tuple[List[str], str]:
-    """
-    3단계 우선순위 매칭으로 최적 템플릿 검색
-
-    Args:
-        category: 원본 카테고리 문자열
-        template_dict: 템플릿 사전 {정규화된_키: 헤더_리스트}
-
-    Returns:
-        (템플릿_헤더_리스트, 매칭된_키)
-    """
-    normalized = normalize_category_path(category)
-    if not normalized:
-        return [], ""
-
-    parts = normalized.split('/')
-
-    # 깊은 경로부터 최상위까지 순차 검색
-    # 예: beauty/makeup/lips → beauty/makeup → beauty
-    for depth in range(len(parts), 0, -1):
-        search_path = '/'.join(parts[:depth])
-
-        if search_path in template_dict:
-            print(f"   [TEMPLATE_MATCH] Found at depth {depth}: '{search_path}' for '{category}'")
-            return template_dict[search_path], search_path
-
-    return [], ""
-
-
 def _find_col_index(keys: List[str], name: str, extra_alias: List[str] = []) -> int:
-
     """
     헤더 키 목록(keys=header_key 적용된 리스트)에서 name 또는 alias를 찾음
     - 1순위: name(타겟)의 정확 매칭
@@ -160,36 +86,16 @@ def _pick_index_by_candidates(header_row: List[str], candidates: List[str]) -> i
     return -1
 
 
+# (참고) 레퍼런스 시트에서 템플릿 헤더 사전 로딩
 def _load_template_dict(ref: gspread.Spreadsheet) -> Dict[str, List[str]]:
-    """템플릿 사전을 정규화된 키로 로딩 (개선된 버전)"""
     ref_sheet = get_env("TEMPLATE_DICT_SHEET_NAME", "TemplateDict")
     ws = safe_worksheet(ref, ref_sheet)
     vals = with_retry(lambda: ws.get_all_values()) or []
-
     out: Dict[str, List[str]] = {}
-
     for r in vals[1:]:
         if not r or not (r[0] or "").strip():
             continue
-
-        original_category = r[0].strip()
-        headers = [str(x or "").strip() for x in r[1:]]
-
-        # 정규화된 키로 저장 (핵심 개선!)
-        normalized_key = normalize_category_path(original_category)
-        if normalized_key:
-            out[normalized_key] = headers
-
-            # 디버깅을 위한 로그 (처음 5개만 출력)
-            if len(out) <= 5:
-                print(f"   [TEMPLATE_LOAD] '{original_category}' → '{normalized_key}'")
-
-    print(f"   [TEMPLATE_LOAD] Total templates loaded: {len(out)}")
-    print(f"\n📋 [TEMPLATE_LOAD] 로딩 완료:")
-    print(f"   총 템플릿 개수: {len(out)}")
-    print(f"   샘플 키들 (처음 10개):")
-    for i, key in enumerate(list(out.keys())[:10], 1):
-        print(f"     {i}. '{key}'")
+        out[header_key(r[0])] = [str(x or "").strip() for x in r[1:]]
     return out
 
 
@@ -291,65 +197,12 @@ def run_step_C2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
             failures.append([pid, "", pname, "CATEGORY_MISSING", f"row={r + 1}"])
             continue
 
-        # ========================================
-        # 핵심 수정: 3단계 우선순위 매칭 적용
-        # ========================================
-        pid = variation or sku or f"ROW{r + 1}"
-
-        headers, matched_key = find_best_template_match(category, template_dict)
-
-        headers, matched_key = find_best_template_match(category, template_dict)
-
-        if not category:
-            pid = variation or sku or f"ROW{r + 1}"
-            failures.append([pid, "", pname, "CATEGORY_MISSING", f"row={r + 1}"])
+        top_norm = header_key(top_of_category(category) or "")
+        headers = template_dict.get(top_norm)
+        if not headers:
+            failures.append(["", category, pname, "TEMPLATE_TOPLEVEL_NOT_FOUND", f"top={top_of_category(category)}"])
             continue
 
-        # ========================================
-        # 핵심 수정: 3단계 우선순위 매칭 적용
-        # ========================================
-        pid = variation or sku or f"ROW{r + 1}"
-
-        headers, matched_key = find_best_template_match(category, template_dict)
-
-        if not headers:
-            # ========================================
-            # 진단: 매칭 실패 원인 상세 분석
-            # ========================================
-            normalized_cat = normalize_category_path(category)
-            parts = normalized_cat.split('/') if normalized_cat else []
-
-            print(f"\n🚨 [MATCHING_FAILED] Row {r + 1} - PID: {pid}")
-            print(f"   원본 카테고리: '{category}'")
-            print(f"   정규화 결과: '{normalized_cat}'")
-            print(f"   분할 결과: {parts}")
-
-            print(f"   시도한 경로들:")
-            for depth in range(len(parts), 0, -1):
-                search_path = '/'.join(parts[:depth])
-                exists = "✅ 존재" if search_path in template_dict else "❌ 없음"
-                print(f"     - depth {depth}: '{search_path}' {exists}")
-
-            # TemplateDict 샘플 출력 (힌트 제공)
-            print(f"   TemplateDict 샘플 키 (처음 5개):")
-            for i, key in enumerate(list(template_dict.keys())[:5], 1):
-                print(f"     {i}. '{key}'")
-
-            # 🔥 핵심 변경: continue 대신 C5 호환 기본 템플릿 사용
-            headers = [
-                "Category", "Product Name", "Product Description", "SKU", "Parent SKU",
-                "Variation Integration", "Variation Name1", "Option for Variation 1",
-                "Image per variation", "Cover Image", "Item Image 1", "Item Image 2",
-                "Item Image 3", "Item Image 4", "Item Image 5", "Brand", "Stock",
-                "Weight", "Days to ship", "Global SKU Price"
-            ]
-            matched_key = normalized_cat or "unknown"
-
-            failures.append([pid, category, pname, "TEMPLATE_NOT_FOUND",
-                             f"normalized={normalized_cat}"])
-            print(f"   ⚠️ C5 호환 기본 템플릿을 적용합니다.")
-
-        # 템플릿 행 생성 (이 부분은 기존과 동일)
         tem_row = [""] * len(headers)
         set_if_exists(headers, tem_row, "category", category)
         set_if_exists(headers, tem_row, "product name", pname)
@@ -360,8 +213,8 @@ def run_step_C2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
         set_if_exists(headers, tem_row, "sku", sku)
         set_if_exists(headers, tem_row, "brand", brand)
 
-        # 버킷 키는 매칭된 정규화 키 사용
-        b = buckets.setdefault(matched_key, {"headers": headers, "pids": [], "rows": []})
+        pid = variation or sku or f"ROW{r + 1}"
+        b = buckets.setdefault(top_norm, {"headers": headers, "pids": [], "rows": []})
         b["pids"].append([pid])
         b["rows"].append(tem_row)
 
@@ -398,22 +251,12 @@ def run_step_C3_fda(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet, overwrite
     FDA_CODE = "10-1-9999999"
 
     try:
-        # Reference 시트에서 FDA 대상 카테고리 목록 읽기 (정규화 적용)
+        # Reference 시트에서 FDA 대상 카테고리 목록 읽기
         fda_ws = safe_worksheet(ref, fda_sheet_name)
         fda_vals_2d = with_retry(lambda: fda_ws.get_values('A:A', value_render_option='UNFORMATTED_VALUE'))
-
-        # 정규화된 키로 변환하여 저장
-        target_categories = set()
-        for r in (fda_vals_2d or []):
-            if r and str(r[0]).strip():
-                normalized = normalize_category_path(str(r[0]).strip())
-                if normalized:
-                    target_categories.add(normalized)
-
-        print(f"   [FDA] Loaded {len(target_categories)} categories")
-
+        # (automation_steps.py 원본 로직) 전체 경로를 소문자로 변환하여 비교
+        target_categories = {str(r[0]).strip().lower() for r in (fda_vals_2d or []) if r and str(r[0]).strip()}
     except Exception as e:
-
         print(
             f"[!] '{fda_sheet_name}' 탭을 읽는 데 실패했습니다: {e}. Step C3을 건너<binary data, 2 bytes><binary data, 2 bytes><binary data, 2 bytes>니다.")
         return
@@ -443,14 +286,9 @@ def run_step_C3_fda(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet, overwrite
         if not pid: continue
 
         category_val_raw = (row[col_category_B + 1] if len(row) > (col_category_B + 1) else "").strip()
-        if not category_val_raw:
-            continue
+        category_val_normalized = category_val_raw.lower()
 
-        # 정규화된 키로 비교 (핵심 개선!)
-        category_val_normalized = normalize_category_path(category_val_raw)
-
-        if category_val_normalized in target_categories:
-
+        if category_val_normalized and category_val_normalized in target_categories:
             c_fda_sheet_col = col_fda_B + 2
             # TEM_OUTPUT 행의 해당 열 값(FDA 필드)을 가져옵니다.
             cur_fda = (row[c_fda_sheet_col - 1] if len(row) >= c_fda_sheet_col else "").strip()
