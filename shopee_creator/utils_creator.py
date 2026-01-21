@@ -16,7 +16,7 @@ import re
 import time
 import random
 from pathlib import Path
-from typing import Optional, List, Dict, Callable, Iterable, Sequence, Any # Any 추가
+from typing import Optional, List, Dict, Callable, Iterable, Sequence, Any  # Any 추가
 
 import gspread
 from gspread.exceptions import WorksheetNotFound
@@ -35,6 +35,7 @@ except Exception:  # 로컬 스크립트 실행 등
     st = None  # type: ignore
     Credentials = None  # type ignore
 
+
 # =============================
 # 환경 변수 & .env 로딩
 # =============================
@@ -46,6 +47,7 @@ def load_env():
             load_dotenv(p, override=True)
             return
     load_dotenv(override=True)  # fallback
+
 
 def get_env(name: str, default: str = "") -> str:
     """Streamlit secrets, OS ENV, .env 순서로 값을 찾음"""
@@ -63,6 +65,7 @@ def get_env(name: str, default: str = "") -> str:
 
     return str(val).strip()
 
+
 def get_bool_env(name: str, default: bool = False) -> bool:
     """환경 변수/Secrets에서 T/F/1/0 등 bool 값을 파싱"""
     s = get_env(name, str(default))
@@ -70,6 +73,7 @@ def get_bool_env(name: str, default: bool = False) -> bool:
         return default
     s_lower = s.lower()
     return s_lower in ("true", "t", "1", "y", "yes")
+
 
 # =============================
 # gspread 인증
@@ -107,9 +111,9 @@ def authorize_gspread() -> gspread.Client:
     """인증 방식 우선순위에 따라 gspread.Client를 반환"""
     # 1. Streamlit Secrets 인증 시도
     gc = _authorize_gspread_via_secrets()
-    if gc is not None: 
+    if gc is not None:
         return gc
-    
+
     # 2. GOOGLE_APPLICATION_CREDENTIALS 또는 service_account.json (개발 용)
     try:
         return gspread.service_account()
@@ -127,31 +131,34 @@ def header_key(s: str) -> str:
     """헤더 정규화: 소문자화, 공백/특수문자 제거"""
     return re.sub(r"[\W_]+", "", str(s or "").lower())
 
+
 def top_of_category(s: str) -> str:
     """
-    카테고리 문자열에서 최상위 카테고리만 추출합니다. 
+    카테고리 문자열에서 최상위 카테고리만 추출합니다.
     (예: '101643 - Beauty/Makeup/Lips/Lip Gloss' -> 'Beauty')
     """
     # 1. 문자열 전체에서 슬래시 주변 공백 제거
     normalized_s = re.sub(r'\s*/\s*', '/', str(s or "").strip())
     # 2. 첫 번째 슬래시까지만 자름
     parts = normalized_s.split("/", 1)
-    
+
     if not parts or not parts[0].strip():
         return ""
-    
+
     top_part = parts[0].strip()
-    
+
     # 3. "101643 - Beauty" 패턴에서 숫자 코드와 하이픈 제거
     match = re.match(r'^\s*\d+\s*-\s*(.*)', top_part)
     if match:
         return match.group(1).strip()
-        
-    return top_part # 숫자 코드가 없는 경우 그대로 반환
+
+    return top_part  # 숫자 코드가 없는 경우 그대로 반환
+
 
 def get_tem_sheet_name() -> str:
     """TEM_OUTPUT 시트 이름"""
     return get_env("TEM_OUTPUT_SHEET_NAME", "TEM_OUTPUT")
+
 
 def sheet_link(ss_id: str) -> str:
     """스프레드시트 ID로 링크 생성"""
@@ -175,6 +182,7 @@ def extract_sheet_id(url_or_id: str) -> str:
     except Exception as e:
         raise ValueError(f"올바른 Google Sheets URL 또는 ID 형식이 아닙니다: {e}") from e
 
+
 def with_retry[T](func: Callable[[], T], max_tries=5, delay=1.0) -> Optional[T]:
     """gspread 요청에 대한 지수 백오프/재시도 래퍼"""
     for i in range(max_tries):
@@ -191,6 +199,7 @@ def with_retry[T](func: Callable[[], T], max_tries=5, delay=1.0) -> Optional[T]:
             time.sleep(delay * (2 ** i) + random.random())
     return None
 
+
 def safe_worksheet(sh: gspread.Spreadsheet, title: str) -> gspread.Worksheet:
     """시트가 존재하는지 확인하고 반환. 없으면 WorksheetNotFound 발생."""
     return with_retry(lambda: sh.worksheet(title))
@@ -198,6 +207,7 @@ def safe_worksheet(sh: gspread.Spreadsheet, title: str) -> gspread.Worksheet:
 
 # ========== Read 캐시 + 429 백오프 래퍼 ==========
 _READ_CACHE: Dict[tuple[str, str], List[List[str]]] = {}
+
 
 def read_values(ws: gspread.Worksheet, *, range_name: Optional[str] = None, use_cache: bool = True) -> List[List[str]]:
     """
@@ -249,23 +259,23 @@ def read_values(ws: gspread.Worksheet, *, range_name: Optional[str] = None, use_
 # 신규 생성(item_creator) 지원 유틸
 # =============================
 
-def _is_true(v: Any) -> bool: # v의 타입을 Any로 변경
+def _is_true(v: Any) -> bool:  # v의 타입을 Any로 변경
     """
     gspread에서 읽어온 값이 True인지 확인 (불리언, 문자열 'TRUE', 't', '1', '✔' 등 포함)
     """
     if isinstance(v, bool):
         return v
-    
+
     s = str(v or "").strip().lower()
     return s in ("true", "t", "1", "y", "yes", "✔", "✅")
 
 
 def forward_fill_by_group(
-    data: Sequence[List[str]],
-    group_idx: int,
-    fill_col_indices: List[int],
-    reset_when: Callable[[List[str]], bool],
-    header_rows: int = 1,
+        data: Sequence[List[str]],
+        group_idx: int,
+        fill_col_indices: List[int],
+        reset_when: Callable[[List[str]], bool],
+        header_rows: int = 1,
 ) -> List[List[str]]:
     """
     특정 그룹 컬럼(group_idx)의 값이 같거나 비어있을 경우,
@@ -273,11 +283,11 @@ def forward_fill_by_group(
     reset_when: 이 함수가 True를 반환하면 그룹이 단절된 것으로 간주하고 필링 중단.
     """
     output = [list(row) for row in data]
-    
+
     # 헤더는 필링하지 않음
     for r in range(header_rows, len(output)):
         row = output[r]
-        
+
         # 1. 그룹 단절 체크
         if reset_when(row):
             # 그룹이 단절되면 이전에 필링된 값들을 초기화
@@ -285,14 +295,15 @@ def forward_fill_by_group(
                 if j < len(row):
                     row[j] = ""
             continue
-        
+
         # 2. 그룹 값이 바뀌지 않았거나 비어있는 경우 (이전 그룹과 동일)
-        prev_row = output[r-1]
-        
+        prev_row = output[r - 1]
+
         # 이전 행의 그룹 값(group_idx)이 현재 행의 그룹 값과 같거나, 현재 행의 그룹 값이 비어있다면 필링 시도
         is_same_group = (
-            (group_idx < len(row) and not (row[group_idx] or "").strip()) or # 현재 그룹 값 비어있음
-            (group_idx < len(row) and group_idx < len(prev_row) and (row[group_idx] or "").strip() == (prev_row[group_idx] or "").strip())
+                (group_idx < len(row) and not (row[group_idx] or "").strip()) or  # 현재 그룹 값 비어있음
+                (group_idx < len(row) and group_idx < len(prev_row) and (row[group_idx] or "").strip() == (
+                            prev_row[group_idx] or "").strip())
         )
 
         # 3. 필링 실행 (fill_col_indices의 값이 비어있을 경우, 이전 행 값으로 채움)
@@ -300,102 +311,10 @@ def forward_fill_by_group(
             if j < len(row) and j < len(prev_row):
                 current_val = (row[j] or "").strip()
                 prev_val = (prev_row[j] or "").strip()
-                
+
                 if not current_val and prev_val:
                     row[j] = prev_val
-    
+
     return output
 
-
-# =============================
-# [NEW] 중카테고리 & 시트명 유틸
-# =============================
-
-def mid_of_category(s: str, depth: int = 2) -> str:
-    """카테고리 경로에서 중카테고리(depth=2)까지만 추출
-
-    Examples:
-        >>> mid_of_category("Food & Beverages/Snacks/Chips")
-        "Food & Beverages/Snacks"
-        >>> mid_of_category("Health/Personal Care/Skincare")
-        "Health/Personal Care"
-        >>> mid_of_category("Health/Others")  # 2단계면 그대로
-        "Health/Others"
-        >>> mid_of_category("Home & Living")  # 1단계면 그대로
-        "Home & Living"
-    """
-    if not s or not isinstance(s, str):
-        return ""
-
-    # 슬래시로 분할하고 빈 부분 제거
-    parts = [p.strip() for p in s.strip().split("/") if p.strip()]
-
-    # depth보다 짧으면 전체 반환
-    if len(parts) <= depth:
-        return "/".join(parts)
-
-    # depth까지만 반환 (중카테고리 = 2단계)
-    return "/".join(parts[:depth])
-
-
-def safe_sheet_name(category_name: str, max_length: int = 31) -> str:
-    """Excel 시트명 제약 조건을 만족하도록 카테고리명 변환"""
-    if not category_name:
-        return "UNKNOWN"
-
-    # 특수문자를 언더스코어로 치환
-    clean_name = re.sub(r'[\\/*?:\[\]&]', '_', str(category_name))
-
-    # 공백을 언더스코어로
-    clean_name = clean_name.replace(' ', '_')
-
-    # 연속된 언더스코어 제거
-    clean_name = re.sub(r'_+', '_', clean_name)
-
-    # 앞뒤 언더스코어 제거
-    clean_name = clean_name.strip('_')
-
-    # 길이 제한 처리
-    if len(clean_name) <= max_length:
-        return clean_name
-
-    # 스마트 축약: 마지막 부분(세부 카테고리) 우선 보존
-    parts = clean_name.split('_')
-    if len(parts) >= 2:
-        first_part = parts[0][:10]
-        remaining_length = max_length - len(first_part) - 1
-        last_parts = '_'.join(parts[1:])
-
-        if len(last_parts) <= remaining_length:
-            return f"{first_part}_{last_parts}"
-        else:
-            return f"{first_part}_{last_parts[:remaining_length]}"
-
-    return clean_name[:max_length]
-
-
-# =============================
-# [NEW] 중카테고리 추출 유틸
-# =============================
-
-def mid_of_category(s: str, depth: int = 2) -> str:
-    """
-    카테고리 경로에서 중카테고리(depth=2)까지만 추출
-
-    Examples:
-        >>> mid_of_category("Food & Beverages/Snacks/Chips")
-        "Food & Beverages/Snacks"
-        >>> mid_of_category("Health/Personal Care")
-        "Health/Personal Care"
-        >>> mid_of_category("Home & Living")  # 단일 레벨은 그대로
-        "Home & Living"
-    """
-    if not s or not isinstance(s, str):
-        return ""
-
-    parts = [p.strip() for p in s.strip().split("/") if p.strip()]
-
-    if len(parts) <= depth:
-        return "/".join(parts)
-
-    return "/".join(parts[:depth])
+# end of MASTER UTILS
