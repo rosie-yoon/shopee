@@ -26,6 +26,10 @@ class StepLog:
 
 
 class ShopeeCreator:
+    def get_tem_values_xlsx(self):
+        from .creation_steps import get_tem_values_xlsx  # 또는 내부 로직 직접
+        return self._impl.get_tem_values_xlsx()  # 구조에 맞게
+
     def __init__(self, secrets):
         self.secrets = secrets
 
