@@ -1,81 +1,92 @@
 # shopee_creator/creation_steps.py
-# -*- coding: utf-8 -*
-from __future__ import annotations
+# -*- coding: utf-8 -*-
 
-from typing import List, Dict, Optional
-import io
-import csv
+from __future__ import annotations
+from typing import Dict, List, Tuple, Optional
 import re
+from collections import defaultdict
 from io import BytesIO
 
 import gspread
 from gspread.cell import Cell
 from gspread.utils import rowcol_to_a1
-from gspread.exceptions import WorksheetNotFound, APIError
+from gspread.exceptions import WorksheetNotFound
 import pandas as pd
 
 from .utils_creator import (
-    header_key, top_of_category, get_tem_sheet_name,
-    with_retry, safe_worksheet, get_env,
-    forward_fill_by_group, _is_true
+    header_key,
+    get_tem_sheet_name,
+    with_retry,
+    safe_worksheet,
+    forward_fill_by_group,
+    _is_true,
+    get_env,
 )
 
+# ===============================================================
+# Category normalization & matching (🔥 핵심 로직)
+# ===============================================================
 
-# -------------------------------------------------------------------
-# 공용: 시트 탭 유연 탐색(정확/부분 매칭)
-# -------------------------------------------------------------------
-def _find_worksheet_by_alias(sh: gspread.Spreadsheet, aliases: List[str]) -> gspread.Worksheet:
-    want = {str(a).strip().lower() for a in aliases if str(a).strip()}
-    sheets = sh.worksheets()
+def normalize_category_path(s: str) -> List[str]:
+    """
+    category 문자열을 정규화 후 path list 반환
+    - 숫자코드 제거
+    - &, -, > → /
+    - 슬래시 주변 공백 제거
+    """
+    if not s:
+        return []
 
-    # 1) 정확 매칭
-    for ws in sheets:
-        if ws.title.strip().lower() in want:
-            return ws
+    s = re.sub(r"^\s*\d+\s*-\s*", "", str(s).strip())
+    s = s.replace("&", "and")
+    s = s.replace(">", "/").replace("-", "/")
+    s = re.sub(r"\s*/\s*", "/", s)
+    s = re.sub(r"/+", "/", s)
 
-    # 2) 부분 매칭
-    for ws in sheets:
-        t = ws.title.strip().lower()
-        if any(a in t for a in want):
-            return ws
-
-    raise WorksheetNotFound(
-        f"Sheet not found by aliases: {aliases}; existing={[w.title for w in sheets]}"
-    )
+    return [p.strip() for p in s.split("/") if p.strip()]
 
 
-# -------------------------------------------------------------------
-# C2 전용 헬퍼
-# -------------------------------------------------------------------
-def _find_col_index(keys: List[str], name: str, extra_alias: List[str] = []) -> int:
-    """헤더 키 목록(keys=header_key 적용된 리스트)에서 name 또는 alias를 찾음"""
+def find_headers_by_category(
+    category_raw: str,
+    template_dict: Dict[str, List[str]]
+) -> Tuple[Optional[List[str]], str]:
+    """
+    깊은 카테고리부터 부모까지 순차 매칭
+    """
+    parts = normalize_category_path(category_raw)
+    for i in range(len(parts), 0, -1):
+        key = header_key("/".join(parts[:i]))
+        if key in template_dict:
+            return template_dict[key], key
+    return None, ""
+
+
+# ===============================================================
+# Helpers
+# ===============================================================
+
+def _find_col_index(keys: List[str], name: str, aliases: List[str] = None) -> int:
+    aliases = aliases or []
     tgt = header_key(name)
-    aliases = [header_key(a) for a in extra_alias] + [tgt]
-    # 정확 매칭
+    pool = [header_key(a) for a in aliases] + [tgt]
     for i, k in enumerate(keys):
-        if k in aliases:
+        if k in pool:
             return i
-    # 부분 매칭
     for i, k in enumerate(keys):
-        if any(a and a in k for a in aliases):
+        if any(p in k for p in pool):
             return i
     return -1
 
 
 def _pick_index_by_candidates(header_row: List[str], candidates: List[str]) -> int:
-    """헤더 행에서 후보명(정규화)으로 가장 그럴듯한 인덱스 찾기 (정확 > 부분 일치)"""
     keys = [header_key(x) for x in header_row]
-    # 정확 일치
-    for cand in candidates:
-        ck = header_key(cand)
+    for c in candidates:
+        ck = header_key(c)
         for i, k in enumerate(keys):
             if k == ck:
                 return i
-    # 부분 일치
-    for cand in candidates:
-        ck = header_key(cand)
-        if not ck:
-            continue
+    for c in candidates:
+        ck = header_key(c)
         for i, k in enumerate(keys):
             if ck in k:
                 return i
@@ -83,233 +94,143 @@ def _pick_index_by_candidates(header_row: List[str], candidates: List[str]) -> i
 
 
 def _load_template_dict(ref: gspread.Spreadsheet) -> Dict[str, List[str]]:
-    """
-    Reference 시트의 TemplateDict 탭에서
-    TopLevel(첫 컬럼) → [헤더들] 매핑을 로드.
-    - 탭이 없거나 데이터가 없으면 명확한 에러로 중단(디버깅 용이)
-    """
-    ref_sheet = get_env("TEMPLATE_DICT_SHEET_NAME", "TemplateDict")
-    try:
-        ws = ref.worksheet(ref_sheet)
-    except WorksheetNotFound:
-        raise WorksheetNotFound(f"Required sheet '{ref_sheet}' not found in '{ref.title}'")
-
+    sheet_name = get_env("TEMPLATE_DICT_SHEET_NAME", "TemplateDict")
+    ws = safe_worksheet(ref, sheet_name)
     vals = with_retry(lambda: ws.get_all_values()) or []
 
-    print(f"[TDict][DEBUG] ref='{ref.title}' tab='{ref_sheet}' rows={len(vals)}")
-    try:
-        print("[TDict][DEBUG] tabs in ref (head):", [w.title for w in ref.worksheets()][:10])
-    except Exception:
-        pass
-
     if len(vals) < 2:
-        raise RuntimeError(
-            f"TemplateDict has no data (rows={len(vals)}) in '{ref.title}'. "
-            f"Tab '{ref_sheet}' must have header + at least 1 data row."
-        )
+        raise RuntimeError("TemplateDict is empty")
 
-    out: Dict[str, List[str]] = {}
+    out = {}
     for r in vals[1:]:
-        if not r or not (r[0] or "").strip():
+        if not r or not r[0]:
             continue
-        out[header_key(r[0])] = [str(x or "").strip() for x in r[1:]]
-    if not out:
-        raise RuntimeError("TemplateDict parsed to empty dict. Check first-column values.")
+        parts = normalize_category_path(r[0])
+        if not parts:
+            continue
+        key = header_key("/".join(parts))
+        out[key] = [str(x or "").strip() for x in r[1:]]
     return out
 
 
-def _collect_indices(header_row: List[str]) -> Dict[str, int]:
-    keys = [header_key(x) for x in header_row]
-
-    def idx(name: str, aliases: List[str] = []) -> int:
-        return _find_col_index(keys, name, extra_alias=aliases)
-
-    return {
-        "create": idx("create", ["use", "apply"]),
-        "variation": idx("variation",
-                         ["variationno", "variationintegrationno", "var code", "variation code", "parent sku",
-                          "parentsku"]),
-        "sku": idx("sku", ["seller_sku"]),
-        "brand": idx("brand", ["brandname"]),
-        "option_eng": idx("option(eng)", ["optioneng", "option", "option1", "option name", "option for variation 1"]),
-        "prod_name": idx("product name", ["name"]),
-        "desc": idx("description", ["product description"]),
-        "category": idx("category"),
-        "detail_idx": idx("details index", ["detail image count", "details count", "detailindex"]),
-    }
-
-
-# -------------------------------------------------------------------
-# C1: TEM_OUTPUT 시트 준비/초기화
-# -------------------------------------------------------------------
-def run_step_C1(sh: gspread.Spreadsheet, ref: Optional[gspread.Spreadsheet]) -> None:
-    print("\n[ Create ] Step C1: Prepare TEM_OUTPUT sheet ...")
-    tem_name = get_tem_sheet_name()
+def _write_failures(sh, failures: List[List[str]]):
+    if not failures:
+        return
+    header = ["PID", "Category", "ProductName", "ErrorCode", "Detail"]
+    ws = None
     try:
-        tem_ws = safe_worksheet(sh, tem_name)
-        with_retry(lambda: tem_ws.clear())
+        ws = safe_worksheet(sh, "Failures")
+        with_retry(lambda: ws.clear())
     except Exception:
-        tem_ws = with_retry(lambda: sh.add_worksheet(title=tem_name, rows=2000, cols=200))
-    with_retry(lambda: tem_ws.update(values=[[""]], range_name="A1"))
-    print("C1 Done.")
+        ws = with_retry(lambda: sh.add_worksheet(title="Failures", rows=1000, cols=10))
+    ws.update([header] + failures)
 
 
-# -------------------------------------------------------------------
-# C2: Collection → TEM_OUTPUT
-# -------------------------------------------------------------------
-def run_step_C2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet) -> None:
-    print("\n[ Create ] Step C2: Build TEM from Collection ...")
-    tem_name = get_tem_sheet_name()
+# ===============================================================
+# C1
+# ===============================================================
 
-    # 1) TemplateDict 로드
-    template_dict = _load_template_dict(ref)
-    print(f"[C2][DEBUG] TemplateDict loaded. top-level count = {len(template_dict)}")
-
-    # 2) Collection 탭 유연 탐색 (+ 환경변수 오버라이드)
-    coll_name = get_env("COLLECTION_SHEET_NAME", "Collection")
-    aliases = [coll_name, "collection", "collections", "raw", "sheet1", "상품정보", "상품", "수집", "수집데이터"]
+def run_step_C1(sh, ref=None):
+    tem = get_tem_sheet_name()
     try:
-        coll_ws = _find_worksheet_by_alias(sh, aliases)
-    except WorksheetNotFound as e:
-        raise WorksheetNotFound(
-            f"[C2] Could not find Collection tab. tried={aliases}, existing={[w.title for w in sh.worksheets()]}"
-        ) from e
+        ws = safe_worksheet(sh, tem)
+        ws.clear()
+    except Exception:
+        ws = sh.add_worksheet(title=tem, rows=2000, cols=200)
+    ws.update([[""]])
 
-    coll_vals = with_retry(lambda: coll_ws.get_all_values()) or []
-    print(f"[C2][DEBUG] Collection rows = {len(coll_vals)} (header cols = {len(coll_vals[0]) if coll_vals else 0})")
 
-    if not coll_vals or len(coll_vals) < 2:
-        print("[C2] Collection 비어 있음. (rows < 2)")
+# ===============================================================
+# C2 (🔥 문제의 핵심, 최종 안정본)
+# ===============================================================
+
+def run_step_C2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
+    print("[C2] Start")
+
+    template_dict = _load_template_dict(ref)
+
+    coll_name = get_env("COLLECTION_SHEET_NAME", "Collection")
+    coll_ws = safe_worksheet(sh, coll_name)
+    vals = with_retry(lambda: coll_ws.get_all_values()) or []
+
+    if len(vals) < 2:
+        print("[C2] Collection empty")
         return
 
-    # 3) 헤더 인덱스 수집
-    colmap = _collect_indices(coll_vals[0])
-    print("[C2][DEBUG] colmap =", colmap)
+    keys = [header_key(x) for x in vals[0]]
 
-    create_i = colmap["create"] if colmap["create"] >= 0 else -1
-    variation_i = colmap["variation"] if colmap["variation"] >= 0 else 1
-    sku_i = colmap["sku"] if colmap["sku"] >= 0 else 2
-    brand_i = colmap["brand"] if colmap["brand"] >= 0 else 3
-    option_i = colmap["option_eng"] if colmap["option_eng"] >= 0 else 5
-    pname_i = colmap["prod_name"] if colmap["prod_name"] >= 0 else 7
-    desc_i = colmap["desc"] if colmap["desc"] >= 0 else 9
-    category_i = colmap["category"] if colmap["category"] >= 0 else 10
-    dcount_i = colmap["detail_idx"] if colmap["detail_idx"] >= 0 else 11
+    create_i = _find_col_index(keys, "create", ["use", "apply"])
+    category_i = _find_col_index(keys, "category")
+    pname_i = _find_col_index(keys, "product name", ["name"])
+    sku_i = _find_col_index(keys, "sku", ["seller_sku"])
+    brand_i = _find_col_index(keys, "brand")
+    opt_i = _find_col_index(keys, "option", ["option1"])
+    desc_i = _find_col_index(keys, "description", ["product description"])
 
-    if create_i == -1:
-        print("[C2] ERROR: 'create' column not found (aliases: create, use, apply). Check Collection header.")
-        return
-
-    # 4) 그룹 별 forward fill
-    fill_cols = [variation_i, brand_i, pname_i, desc_i, category_i, dcount_i]
-
-    def _reset_when(row: List[str]) -> bool:
-        return not any(str(x or "").strip() for x in row)
+    if create_i < 0 or category_i < 0:
+        raise RuntimeError("Required columns missing in Collection")
 
     ff_vals = forward_fill_by_group(
-        [list(r) for r in coll_vals],
-        group_idx=variation_i,
-        fill_col_indices=fill_cols,
-        reset_when=_reset_when,
+        [list(r) for r in vals],
+        group_idx=sku_i if sku_i >= 0 else create_i,
+        fill_col_indices=[category_i, pname_i, brand_i, desc_i],
+        reset_when=lambda r: not any(str(x or "").strip() for x in r),
     )
-    print(f"[C2][DEBUG] forward-filled rows = {len(ff_vals)}")
 
-    create_true_count = sum(1 for r in ff_vals[1:] if _is_true((r[create_i] if create_i < len(r) else "")))
-    print(f"[C2][DEBUG] Rows where 'create' is True (final check): {create_true_count}")
+    buckets = {}
+    failures = []
 
-    # 5) 버킷 빌드
-    buckets: Dict[str, Dict[str, List]] = {}
-    failures: List[List[str]] = []
-    category_missing_count = 0
-    toplevel_missing_count = 0
-
-    def set_if_exists(headers: List[str], row: List[str], name: str, value: str):
+    def set_if(headers, row, name, val):
         idx = _find_col_index([header_key(h) for h in headers], name)
         if idx >= 0:
-            row[idx] = value
-
-    created_rows = 0
-    failed_categories_log: List[str] = []
+            row[idx] = val
 
     for r in range(1, len(ff_vals)):
         row = ff_vals[r]
-        if not _is_true(row[create_i] if create_i < len(row) else ""):
+        if not _is_true(row[create_i]):
             continue
 
-        variation = (row[variation_i] if variation_i < len(row) else "").strip()
-        sku = (row[sku_i] if sku_i < len(row) else "").strip()
-        brand = (row[brand_i] if brand_i < len(row) else "").strip()
-        opt1 = (row[option_i] if option_i < len(row) else "").strip()
-        pname = (row[pname_i] if pname_i < len(row) else "").strip()
-        desc = (row[desc_i] if desc_i < len(row) else "").strip()
-        category = (row[category_i] if category_i < len(row) else "").strip()
+        category = row[category_i].strip()
+        pname = row[pname_i].strip() if pname_i >= 0 else ""
+        sku = row[sku_i].strip() if sku_i >= 0 else ""
+        brand = row[brand_i].strip() if brand_i >= 0 else ""
+        opt = row[opt_i].strip() if opt_i >= 0 else ""
+        desc = row[desc_i].strip() if desc_i >= 0 else ""
 
-        if not category:
-            pid = variation or sku or f"ROW{r + 1}"
-            failures.append([pid, "", pname, "CATEGORY_MISSING", f"row={r + 1}"])
-            category_missing_count += 1
-            continue
+        pid = sku or f"ROW{r+1}"
 
-        top_category_raw = top_of_category(category)
-        top_norm = header_key(top_category_raw or "")
-        headers = template_dict.get(top_norm)
+        headers, bucket_key = find_headers_by_category(category, template_dict)
 
         if not headers:
-            failures.append(
-                ["", category, pname, "TEMPLATE_TOPLEVEL_NOT_FOUND", f"top={top_category_raw} (Key: {top_norm})"])
-            toplevel_missing_count += 1
-            if top_category_raw not in failed_categories_log:
-                failed_categories_log.append(f"'{top_category_raw}' (Key: '{top_norm}')")
+            failures.append([pid, category, pname, "TEMPLATE_NOT_FOUND", category])
             continue
 
         tem_row = [""] * len(headers)
-        set_if_exists(headers, tem_row, "category", category)
-        set_if_exists(headers, tem_row, "product name", pname)
-        set_if_exists(headers, tem_row, "product description", desc)
-        set_if_exists(headers, tem_row, "variation integration", variation)
-        set_if_exists(headers, tem_row, "variation name1", "Options")
-        set_if_exists(headers, tem_row, "parent sku", variation)
-        set_if_exists(headers, tem_row, "variation integration no.", variation)
-        set_if_exists(headers, tem_row, "option for variation 1", opt1)
-        set_if_exists(headers, tem_row, "sku", sku)
-        set_if_exists(headers, tem_row, "brand", brand)
+        set_if(headers, tem_row, "category", category)
+        set_if(headers, tem_row, "product name", pname)
+        set_if(headers, tem_row, "brand", brand)
+        set_if(headers, tem_row, "sku", sku)
+        set_if(headers, tem_row, "option for variation 1", opt)
+        set_if(headers, tem_row, "product description", desc)
 
-        pid = variation or sku or f"ROW{r + 1}"
-        b = buckets.setdefault(top_norm, {"headers": headers, "pids": [], "rows": []})
-        b["pids"].append([pid])
-        b["rows"].append(tem_row)
-        created_rows += 1
+        b = buckets.setdefault(bucket_key, {"headers": headers, "rows": []})
+        b["rows"].append([pid] + tem_row)
 
-    print(
-        f"[C2][DEBUG] Filtered summary: Created={created_rows}, Category Missing={category_missing_count}, Toplevel Not Found={toplevel_missing_count}")
-    print(f"[C2][DEBUG] Total failures: {len(failures)}")
-    if failed_categories_log:
-        print("\n[C2][ERROR] TEMPLATE DICT MATCH FAILURES:")
-        for log in failed_categories_log:
-            print(f"  → Missing Top-Level Key: {log}")
-        print("---------------------------------------")
+    _write_failures(sh, failures)
 
-    # 6) TEM_OUTPUT 갱신
-    out_matrix: List[List[str]] = []
-    for top_key, pack in buckets.items():
-        out_matrix.append(["PID"] + pack["headers"])
-        out_matrix.extend([pid_row + data_row for pid_row, data_row in zip(pack["pids"], pack["rows"])])
-        print(f"[C2][DEBUG] bucket[{top_key}] rows = {len(pack['rows'])}")
+    tem_ws = safe_worksheet(sh, get_tem_sheet_name())
+    tem_ws.clear()
 
-    if out_matrix:
-        tem_ws = safe_worksheet(sh, tem_name)
-        with_retry(lambda: tem_ws.clear())
-        max_cols = max(len(r) for r in out_matrix)
-        end_a1 = rowcol_to_a1(len(out_matrix), max_cols)
-        with_retry(lambda: tem_ws.resize(rows=len(out_matrix) + 10, cols=max_cols + 10))
-        with_retry(lambda: tem_ws.update(values=out_matrix, range_name=f"A1:{end_a1}"))
-        print(f"[C2] TEM_OUTPUT updated. rows={len(out_matrix)} cols={max_cols}")
+    out = []
+    for b in buckets.values():
+        out.append(["PID"] + b["headers"])
+        out.extend(b["rows"])
+
+    if out:
+        tem_ws.update(out)
+        print(f"[C2] TEM_OUTPUT rows={len(out)}")
     else:
-        print("[C2] out_matrix is empty → TEM_OUTPUT 미갱신 (TemplateDict/Collection 확인 필요)")
-
-    print("C2 Done.")
-
-
+        print("[C2] No rows generated")
 # -------------------------------------------------------------------
 # C3: FDA Registration No. 채우기
 # -------------------------------------------------------------------
