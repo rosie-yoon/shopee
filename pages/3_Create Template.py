@@ -184,7 +184,6 @@ if run_clicked:
     run_list = [
         ("C1 Initialize", lambda: steps.run_step_C1(sh, ref)),
         ("C2 Collection → TEM (중카테고리)", lambda: steps.run_step_C2(sh, ref)),
-        ("C7 Mandatory Defaults", lambda: steps.run_step_C7_mandatory_defaults(sh, ref)),
         ("C3 FDA", lambda: steps.run_step_C3_fda(sh, ref)),
         ("C4 Prices", lambda: steps.run_step_C4_prices(sh)),
         ("C5 Images", lambda: steps.run_step_C5_images(sh=sh, base_url=host, shop_code=shop_code)),
