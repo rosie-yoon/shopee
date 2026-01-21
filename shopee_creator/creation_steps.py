@@ -341,6 +341,9 @@ def run_step_C4_prices(sh: gspread.Spreadsheet) -> None:
                     prc = (row[ix_cpr] if ix_cpr < len(row) else "").strip()
                     if sku and prc:
                         margin_price_by_sku[sku] = prc
+            print("[C4][DEBUG] margin_price_by_sku size =", len(margin_price_by_sku))
+            print("[C4][DEBUG] margin sample keys =", list(margin_price_by_sku.keys())[:5])
+
     except WorksheetNotFound:
         print("[C4] MARGIN 시트 없음 → MARGIN 가격 맵 생략.")
 
@@ -407,6 +410,11 @@ def run_step_C4_prices(sh: gspread.Spreadsheet) -> None:
         # 1) 우선순위: SKU → MARGIN 소비자가
         sku = (row[idx_sku_B + 1] if idx_sku_B != -1 and len(row) > idx_sku_B + 1 else "").strip()
         price_from_margin = margin_price_by_sku.get(sku, "")
+        print(
+            "[C4][DEBUG]",
+            "tem sku =", sku,
+            "price_from_margin =", price_from_margin
+        )
 
         # 2) 보조: Parent SKU/VarInt → Collection 가격
         parent = (row[idx_parent_B + 1] if idx_parent_B != -1 and len(row) > idx_parent_B + 1 else "").strip()
