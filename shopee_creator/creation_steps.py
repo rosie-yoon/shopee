@@ -47,6 +47,33 @@ def _find_worksheet_by_alias(sh: gspread.Spreadsheet, aliases: List[str]) -> gsp
 # -------------------------------------------------------------------
 # C2 전용 헬퍼
 # -------------------------------------------------------------------
+def generate_category_keys(category_raw: str) -> tuple[str, str, str]:
+    """
+    category_raw에서 (full_key, mid_key, top_key)를 생성
+    - full_key: 전체 경로 (Beauty/Makeup/Lips)
+    - mid_key: 부모 경로 (Beauty/Makeup) ← 중카테고리 기준
+    - top_key: 최상위 (Beauty)
+    """
+    if not category_raw:
+        return "", "", ""
+
+    # 1. 숫자 코드 제거
+    cleaned = re.sub(r'^\s*\d+\s*-\s*', '', str(category_raw).strip())
+
+    # 2. 슬래시 정규화
+    normalized = re.sub(r'\s*/\s*', '/', cleaned)
+
+    parts = [p.strip() for p in normalized.split('/') if p.strip()]
+    if not parts:
+        return "", "", ""
+
+    full_key = header_key('/'.join(parts))
+    mid_key = header_key('/'.join(parts[:-1])) if len(parts) > 1 else header_key(parts[0])
+    top_key = header_key(parts[0])
+
+    return full_key, mid_key, top_key
+
+
 def _find_col_index(keys: List[str], name: str, extra_alias: List[str] = []) -> int:
     """헤더 키 목록(keys=header_key 적용된 리스트)에서 name 또는 alias를 찾음"""
     tgt = header_key(name)
