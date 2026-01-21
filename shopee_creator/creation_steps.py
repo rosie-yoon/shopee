@@ -250,9 +250,13 @@ def run_step_C2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet) -> None:
             category_missing_count += 1
             continue
 
-        top_category_raw = top_of_category(category)
-        top_norm = header_key(top_category_raw or "")
-        headers = template_dict.get(top_norm)
+        full_key, mid_key, top_key = generate_category_keys(category)
+
+        headers = (
+                template_dict.get(full_key)
+                or template_dict.get(mid_key)
+                or template_dict.get(top_key)
+        )
 
         if not headers:
             failures.append(
