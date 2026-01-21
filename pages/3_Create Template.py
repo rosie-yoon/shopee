@@ -33,9 +33,6 @@ from profile_sidebar import render_profile_sidebar, extract_sheet_id
 from shopee_creator.controller import ShopeeCreator
 from shopee_creator.utils_creator import get_env
 import shopee_creator.creation_steps as steps
-creator = ShopeeCreator(sheet_url, ref_url)
-
-xlsx_buf = creator.get_tem_values_xlsx()
 
 # ──────────────────────────────────────────────
 # Auth Bootstrap
@@ -220,7 +217,7 @@ if run_clicked:
         # 핵심 변경 1: 파일 생성 로직 단순화
         # ========================================
         try:
-            out_bytes = export_tem_xlsx(sh)
+            out_bytes = ctrl.get_tem_values_xlsx()
 
             if out_bytes and isinstance(out_bytes, (bytes, bytearray)) and len(out_bytes) > 0:
                 st.session_state["DL_XLSX"] = out_bytes
