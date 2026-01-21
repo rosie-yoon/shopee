@@ -279,18 +279,25 @@ def run_step_C2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet) -> None:
 
         full_key, mid_key, top_key = generate_category_keys(category)
 
-        headers = (
-                template_dict.get(full_key)
-                or template_dict.get(mid_key)
-                or template_dict.get(top_key)
-        )
+        bucket_key = ""
+        headers = template_dict.get(full_key)
+        if headers:
+            bucket_key = full_key
+        else:
+            headers = template_dict.get(mid_key)
+            if headers:
+                bucket_key = mid_key
+            else:
+                headers = template_dict.get(top_key)
+                if headers:
+                    bucket_key = top_key
 
         if not headers:
-            failures.append(
-                ["", category, pname, "TEMPLATE_TOPLEVEL_NOT_FOUND", f"top={top_category_raw} (Key: {top_norm})"])
-            toplevel_missing_count += 1
-            if top_category_raw not in failed_categories_log:
-                failed_categories_log.append(f"'{top_category_raw}' (Key: '{top_norm}')")
+            failures.append([
+                "", category, pname,
+                "TEMPLATE_NOT_FOUND",
+                f"keys={full_key}|{mid_key}|{top_key}"
+            ])
             continue
 
         tem_row = [""] * len(headers)
@@ -306,7 +313,7 @@ def run_step_C2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet) -> None:
         set_if_exists(headers, tem_row, "brand", brand)
 
         pid = variation or sku or f"ROW{r + 1}"
-        b = buckets.setdefault(top_norm, {"headers": headers, "pids": [], "rows": []})
+        b = buckets.setdefault(bucket_key, {"headers": headers, "pids": [], "rows": []})
         b["pids"].append([pid])
         b["rows"].append(tem_row)
         created_rows += 1
