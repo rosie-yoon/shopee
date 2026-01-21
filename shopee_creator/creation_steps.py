@@ -1091,9 +1091,18 @@ def export_tem_xlsx(sh: gspread.Spreadsheet) -> Optional[bytes]:
                 if (cat_col_name and not chunk_df.empty)
                 else "UNKNOWN"
             )
-            top_level_name = top_of_category(first_cat) or "UNKNOWN"
+            # 중카테고리(부모) 기준 시트명 생성
+            parts = normalize_category_path(first_cat)
+
+            if len(parts) >= 2:
+                base_name = "_".join(parts[:2])
+            elif len(parts) == 1:
+                base_name = parts[0]
+            else:
+                base_name = "UNKNOWN"
+
             sheet_name = re.sub(
-                r"[\s/\\*?:\[\]]", "_", str(top_level_name).title()
+                r"[\s/\\*?:\[\]]", "_", base_name.title()
             )[:31]
 
             chunk_df.to_excel(writer, sheet_name=sheet_name, index=False)
