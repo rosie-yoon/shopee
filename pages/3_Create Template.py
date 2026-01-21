@@ -186,7 +186,13 @@ if run_clicked:
         ("C2 Collection → TEM (중카테고리)", lambda: steps.run_step_C2(sh, ref)),
         ("C3 FDA", lambda: steps.run_step_C3_fda(sh, ref)),
         ("C4 Prices", lambda: steps.run_step_C4_prices(sh)),
-        ("C5 Images", lambda: steps.run_step_C5_images(sh=sh, base_url=host, shop_code=shop_code)),
+        ("C5 Images", lambda: steps.run_step_C5_images(
+            sh=sh,
+            shop_code=shop_code,
+            cover_base_url=host,
+            details_base_url=host,
+            option_base_url=host,
+        )),
         ("C6 Stock/Weight/Brand", lambda: steps.run_step_C6_stock_weight_brand(sh)),
     ]
 
