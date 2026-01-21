@@ -166,6 +166,19 @@ def run_step_C2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
     brand_i = _find_col_index(keys, "brand")
     opt_i = _find_col_index(keys, "option", ["option1"])
     desc_i = _find_col_index(keys, "description", ["product description"])
+    variation_i = _find_col_index(
+        keys,
+        "variation",
+        [
+            "variationno",
+            "variation integration no",
+            "variationintegrationno",
+            "variation code",
+            "var code",
+            "parent sku",
+            "parentsku",
+        ],
+    )
 
     if create_i < 0 or category_i < 0:
         raise RuntimeError("Required columns missing in Collection")
@@ -196,6 +209,11 @@ def run_step_C2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
         brand = row[brand_i].strip() if brand_i >= 0 else ""
         opt = row[opt_i].strip() if opt_i >= 0 else ""
         desc = row[desc_i].strip() if desc_i >= 0 else ""
+        variation = (
+            row[variation_i].strip()
+            if variation_i >= 0 and variation_i < len(row)
+            else ""
+        )
 
         pid = sku or f"ROW{r+1}"
 
@@ -212,6 +230,12 @@ def run_step_C2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet):
         set_if(headers, tem_row, "sku", sku)
         set_if(headers, tem_row, "option for variation 1", opt)
         set_if(headers, tem_row, "product description", desc)
+        # 🔥 반드시 필요한 변형 정보
+        set_if(headers, tem_row, "variation name1", "Options")
+        set_if(headers, tem_row, "parent sku", variation)
+        set_if(headers, tem_row, "variation integration no.", variation)
+        set_if(headers, tem_row, "variation integration", variation)
+        set_if(headers, tem_row, "variationintegrationno", variation)
 
         b = buckets.setdefault(bucket_key, {"headers": headers, "rows": []})
         b["rows"].append([pid] + tem_row)
