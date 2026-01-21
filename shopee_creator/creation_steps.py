@@ -17,16 +17,11 @@ from gspread.exceptions import WorksheetNotFound
 import pandas as pd
 
 
-# ✅ 공용 유틸은 "한 군데"에서만 가져오도록 정리 (get_env 섀도잉 제거)
-from .utils_common import (
+from .utils_creator import (
     header_key, top_of_category, get_tem_sheet_name,
     with_retry, safe_worksheet, authorize_gspread, extract_sheet_id,
-    get_env, join_url, forward_fill_by_group
+    get_env, forward_fill_by_group
 )
-
-
-# ✅ 패키지 로컬 유틸은 get_env 제외하고 필요한 것만
-from .utils_common import join_url, forward_fill_by_group
 
 
 # ==============================================================================
