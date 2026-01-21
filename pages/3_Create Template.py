@@ -33,7 +33,9 @@ from profile_sidebar import render_profile_sidebar, extract_sheet_id
 from shopee_creator.controller import ShopeeCreator
 from shopee_creator.utils_creator import get_env
 import shopee_creator.creation_steps as steps
-from shopee_creator.creation_steps import export_tem_xlsx
+creator = ShopeeCreator(sheet_url, ref_url)
+
+xlsx_buf = creator.get_tem_values_xlsx()
 
 # ──────────────────────────────────────────────
 # Auth Bootstrap
