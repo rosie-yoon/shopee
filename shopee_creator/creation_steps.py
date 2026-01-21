@@ -47,33 +47,6 @@ def _find_worksheet_by_alias(sh: gspread.Spreadsheet, aliases: List[str]) -> gsp
 # -------------------------------------------------------------------
 # C2 전용 헬퍼
 # -------------------------------------------------------------------
-def generate_category_keys(category_raw: str) -> tuple[str, str, str]:
-    """
-    category_raw에서 (full_key, mid_key, top_key)를 생성
-    - full_key: 전체 경로 (Beauty/Makeup/Lips)
-    - mid_key: 부모 경로 (Beauty/Makeup) ← 중카테고리 기준
-    - top_key: 최상위 (Beauty)
-    """
-    if not category_raw:
-        return "", "", ""
-
-    # 1. 숫자 코드 제거
-    cleaned = re.sub(r'^\s*\d+\s*-\s*', '', str(category_raw).strip())
-
-    # 2. 슬래시 정규화
-    normalized = re.sub(r'\s*/\s*', '/', cleaned)
-
-    parts = [p.strip() for p in normalized.split('/') if p.strip()]
-    if not parts:
-        return "", "", ""
-
-    full_key = header_key('/'.join(parts))
-    mid_key = header_key('/'.join(parts[:-1])) if len(parts) > 1 else header_key(parts[0])
-    top_key = header_key(parts[0])
-
-    return full_key, mid_key, top_key
-
-
 def _find_col_index(keys: List[str], name: str, extra_alias: List[str] = []) -> int:
     """헤더 키 목록(keys=header_key 적용된 리스트)에서 name 또는 alias를 찾음"""
     tgt = header_key(name)
@@ -277,27 +250,16 @@ def run_step_C2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet) -> None:
             category_missing_count += 1
             continue
 
-        full_key, mid_key, top_key = generate_category_keys(category)
-
-        bucket_key = ""
-        headers = template_dict.get(full_key)
-        if headers:
-            bucket_key = full_key
-        else:
-            headers = template_dict.get(mid_key)
-            if headers:
-                bucket_key = mid_key
-            else:
-                headers = template_dict.get(top_key)
-                if headers:
-                    bucket_key = top_key
+        top_category_raw = top_of_category(category)
+        top_norm = header_key(top_category_raw or "")
+        headers = template_dict.get(top_norm)
 
         if not headers:
-            failures.append([
-                "", category, pname,
-                "TEMPLATE_NOT_FOUND",
-                f"keys={full_key}|{mid_key}|{top_key}"
-            ])
+            failures.append(
+                ["", category, pname, "TEMPLATE_TOPLEVEL_NOT_FOUND", f"top={top_category_raw} (Key: {top_norm})"])
+            toplevel_missing_count += 1
+            if top_category_raw not in failed_categories_log:
+                failed_categories_log.append(f"'{top_category_raw}' (Key: '{top_norm}')")
             continue
 
         tem_row = [""] * len(headers)
@@ -313,7 +275,7 @@ def run_step_C2(sh: gspread.Spreadsheet, ref: gspread.Spreadsheet) -> None:
         set_if_exists(headers, tem_row, "brand", brand)
 
         pid = variation or sku or f"ROW{r + 1}"
-        b = buckets.setdefault(bucket_key, {"headers": headers, "pids": [], "rows": []})
+        b = buckets.setdefault(top_norm, {"headers": headers, "pids": [], "rows": []})
         b["pids"].append([pid])
         b["rows"].append(tem_row)
         created_rows += 1
@@ -1232,4 +1194,5 @@ run_c4_price = run_step_C4_prices
 run_c5_images = run_step_C5_images
 run_c6_swb = run_step_C6_stock_weight_brand
 run_c7_mandatory = run_step_C7_mandatory_defaults
+
 
