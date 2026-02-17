@@ -243,55 +243,125 @@ def generate_cover_image_url(row: pd.Series, image_host: str, shop_code: str) ->
 
 
 def merge_and_convert_data(df_basic, df_sales, df_media, image_host, shop_code):
-    """3개 데이터프레임 병합 및 Shopee 형식 변환"""
+    """3개 데이터프레임 병합 및 Shopee 형식 변환 (SKU 매칭 오류 수정)"""
 
-    # 필수 컬럼 매칭 (Shopee 전용 컬럼명 지원)
+    # ========================================
+    # 1. 안전한 컬럼 매칭 (중복 방지 로직)
+    # ========================================
+
+    # BASIC PSKU 매칭
     psku_basic = find_column_flexible('PSKU', df_basic.columns,
-                                      ['Product ID', 'ProductID', 'Item ID', 'et_title_product_id'])
+                                      ['et_title_product_id', 'Product ID', 'ProductID', 'Item ID'])
+
+    # SALES PSKU 매칭 (Parent SKU 계열)
     psku_sales = find_column_flexible('PSKU', df_sales.columns,
-                                      ['Parent SKU', 'ParentSKU', 'Product ID', 'et_title_parent_sku'])
-    sku_sales = find_column_flexible('SKU', df_sales.columns,
-                                     ['Seller SKU', 'SellerSKU', 'Variation SKU', 'et_title_child_sku'])
+                                      ['et_title_parent_sku', 'Parent SKU', 'ParentSKU', 'Product ID'])
+
+    # SALES SKU 매칭 (Child SKU 계열) - 핵심 수정
+    sku_sales = None
+
+    # Child SKU 우선 검색 (Parent와 명확히 구분)
+    child_sku_candidates = [
+        'et_title_child_sku', 'et_title_seller_sku', 'et_title_variation_sku',
+        'Seller SKU', 'SellerSKU', 'Child SKU', 'ChildSKU', 'Variation SKU'
+    ]
+
+    for candidate in child_sku_candidates:
+        found_col = find_column_flexible('SKU', df_sales.columns, [candidate])
+        if found_col and found_col != psku_sales:  # Parent SKU와 다른지 확인
+            sku_sales = found_col
+            break
+
+    # 여전히 못 찾았으면 'sku'가 포함된 컬럼 중 parent가 아닌 것 검색
+    if not sku_sales:
+        for col in df_sales.columns:
+            col_lower = str(col).lower()
+            if 'sku' in col_lower and 'parent' not in col_lower and col != psku_sales:
+                sku_sales = col
+                break
+
+    # MEDIA PSKU 매칭
     psku_media = find_column_flexible('PSKU', df_media.columns,
-                                      ['Product ID', 'ProductID', 'Item ID', 'et_title_product_id'])
+                                      ['et_title_product_id', 'Product ID', 'ProductID', 'Item ID'])
 
-    # 디버깅 정보
+    # ========================================
+    # 2. 디버깅 정보 (개선된 버전)
+    # ========================================
     with st.expander("🔍 컬럼 매칭 결과"):
-        st.write(f"**BASIC PSKU:** `{psku_basic}`")
-        st.write(f"**SALES PSKU:** `{psku_sales}`")
-        st.write(f"**SALES SKU:** `{sku_sales}`")
-        st.write(f"**MEDIA PSKU:** `{psku_media}`")
+        st.write("**BASIC PSKU:**", f"`{psku_basic}`")
+        st.write("**SALES PSKU:**", f"`{psku_sales}`")
+        st.write("**SALES SKU:**", f"`{sku_sales}`")
+        st.write("**MEDIA PSKU:**", f"`{psku_media}`")
 
-    # 필수 컬럼 검증
+        # 중복 매칭 경고
+        if psku_sales == sku_sales:
+            st.error("⚠️ **치명적 오류**: PSKU와 SKU가 같은 컬럼을 가리킵니다!")
+            st.write("SALES 파일의 전체 컬럼 목록:")
+            st.write(list(df_sales.columns))
+
+    # ========================================
+    # 3. 필수 컬럼 검증 (강화)
+    # ========================================
     missing = []
-    if not psku_basic: missing.append("BASIC: PSKU/Product ID")
-    if not psku_sales: missing.append("SALES: PSKU/Parent SKU")
-    if not sku_sales: missing.append("SALES: SKU/Seller SKU")
-    if not psku_media: missing.append("MEDIA: PSKU/Product ID")
+    if not psku_basic: missing.append("BASIC: PSKU/Product ID 계열 컬럼")
+    if not psku_sales: missing.append("SALES: PSKU/Parent SKU 계열 컬럼")
+    if not sku_sales: missing.append("SALES: SKU/Child SKU 계열 컬럼")
+    if not psku_media: missing.append("MEDIA: PSKU/Product ID 계열 컬럼")
+
+    # 중복 매칭 특별 처리
+    if psku_sales == sku_sales:
+        missing.append(f"SALES: PSKU와 SKU가 동일한 컬럼({psku_sales})을 가리킵니다. et_title_child_sku 컬럼이 있는지 확인하세요.")
 
     if missing:
-        raise ValueError(f"필수 컬럼 누락:\n• " + "\n• ".join(missing))
+        raise ValueError("컬럼 매칭 실패:\n• " + "\n• ".join(missing))
 
-    # 컬럼명 통일
+    # ========================================
+    # 4. 안전한 컬럼명 변경 (DataFrame 복사 + 순차 처리)
+    # ========================================
+    df_basic = df_basic.copy()
+    df_sales = df_sales.copy()
+    df_media = df_media.copy()
+
+    # 순차적 rename으로 충돌 방지
     df_basic = df_basic.rename(columns={psku_basic: 'PSKU'})
-    df_sales = df_sales.rename(columns={psku_sales: 'PSKU', sku_sales: 'SKU'})
     df_media = df_media.rename(columns={psku_media: 'PSKU'})
 
-    # 데이터 타입 통일
+    # SALES는 별도 처리 (PSKU → SKU 순서로)
+    rename_map = {}
+    if psku_sales: rename_map[psku_sales] = 'PSKU'
+    if sku_sales and sku_sales != psku_sales: rename_map[sku_sales] = 'SKU'
+
+    df_sales = df_sales.rename(columns=rename_map)
+
+    # ========================================
+    # 5. 병합 전 최종 검증
+    # ========================================
+    if 'PSKU' not in df_sales.columns:
+        raise ValueError(f"SALES 파일에서 PSKU 컬럼 생성 실패. 원본 컬럼: {psku_sales}")
+    if 'SKU' not in df_sales.columns:
+        raise ValueError(f"SALES 파일에서 SKU 컬럼 생성 실패. 원본 컬럼: {sku_sales}")
+
+    # ========================================
+    # 6. 데이터 타입 통일
+    # ========================================
     for df in [df_basic, df_sales, df_media]:
         if 'PSKU' in df.columns:
             df['PSKU'] = df['PSKU'].astype(str).str.strip()
         if 'SKU' in df.columns:
             df['SKU'] = df['SKU'].astype(str).str.strip()
 
-    # 병합 실행
+    # ========================================
+    # 7. 병합 실행
+    # ========================================
     try:
         merged_df = pd.merge(df_sales, df_basic, on='PSKU', how='left', suffixes=('', '_basic'))
         merged_df = pd.merge(merged_df, df_media, on='PSKU', how='left', suffixes=('', '_media'))
     except Exception as e:
         raise ValueError(f"데이터 병합 실패: {str(e)}")
 
-    # 이미지 URL 처리 (Cover Image 제외)
+    # ========================================
+    # 8. 이미지 URL 처리 (Cover Image 제외)
+    # ========================================
     if image_host:
         if not image_host.endswith('/'):
             image_host += '/'
@@ -307,7 +377,9 @@ def merge_and_convert_data(df_basic, df_sales, df_media, image_host, shop_code):
                 else str(x) if pd.notna(x) else ""
             )
 
-    # 최종 컬럼 구성
+    # ========================================
+    # 9. 최종 컬럼 구성
+    # ========================================
     target_columns = [
         "Category", "PSKU", "Product Name", "Variation Name1",
         "Option for Variation 1", "Image per Variation", "SKU",
@@ -323,13 +395,17 @@ def merge_and_convert_data(df_basic, df_sales, df_media, image_host, shop_code):
             source_col = find_column_flexible(target_col, merged_df.columns)
             final_df[target_col] = merged_df[source_col] if source_col else ""
 
-    # Cover Image URL 생성
+    # ========================================
+    # 10. Cover Image URL 생성
+    # ========================================
     final_df['Cover image'] = final_df.apply(
         lambda row: generate_cover_image_url(row, image_host, shop_code),
         axis=1
     )
 
-    # 카테고리 숫자 코드 제거
+    # ========================================
+    # 11. 카테고리 숫자 코드 제거
+    # ========================================
     if 'Category' in final_df.columns:
         final_df['Category'] = final_df['Category'].astype(str).str.replace(
             r'^\s*\d+\s*-\s*', '', regex=True
