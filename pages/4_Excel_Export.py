@@ -1,21 +1,24 @@
 # -*- coding: utf-8 -*-
 """
-Page 4: 통합 엑셀 생성기 (최적화 버전)
-BASIC/MEDIA/SALES 파일을 한 번에 업로드하여 Shopee 업로드용 엑셀 생성
-- 일괄 파일 업로드 및 자동 분류
-- 사이드바 이미지 호스팅 URL 자동 적용
-- Cover Image 규칙: 기존 Step 6과 동일 (PSKU 우선 → SKU)
-- 단일 탭 출력
+Page 4: 통합 엑셀 생성기 (간소화 최종 버전)
+- Shopee Mass Update 파일 구조 완전 대응
+- Google Sheet ID 설정 제거 (로컬 전용)
+- 사이드바에서 이미지 호스팅 URL만 관리
+- UI 간소화
 """
 
 from pathlib import Path
 import sys
 import io
+import warnings
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 import streamlit as st
 import pandas as pd
+
+# openpyxl 경고 억제 (Shopee 파일 호환성)
+warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 st.set_page_config(page_title="Excel Export", layout="wide")
 
@@ -25,8 +28,7 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
 from auth_guard import bootstrap_auth
-from user_manager import get_user_pref
-from profile_sidebar import render_profile_sidebar
+from user_manager import get_user_pref, save_user_pref
 from item_uploader.utils_common import get_env, header_key
 
 bootstrap_auth(go_home=False)
@@ -36,200 +38,239 @@ st.caption("BASIC/MEDIA/SALES 파일을 한 번에 업로드하여 Shopee 업로
 st.markdown("---")
 
 # ──────────────────────────────────────────────
-# 사이드바 설정
+# 사이드바 설정 (이미지 호스팅 URL만)
 # ──────────────────────────────────────────────
-render_profile_sidebar(
-    sheet_key="export_sheet_id",
-    host_key="export_image_host",
-    sheet_label="데이터 시트 URL (미사용)",
-    host_label="Image Hosting URL (필수)",
-)
+with st.sidebar:
+    st.subheader("⚙️ 설정")
 
-
-def resolve_export_host() -> str:
-    """프로필 → 세션 → 환경 순서로 Image Host 탐색"""
-    host = (
+    current_host = (
             get_user_pref("export_image_host")
             or get_user_pref("copy_image_host")
             or get_user_pref("image_host")
+            or get_env("IMAGE_HOSTING_URL")
+            or ""
     )
-    if host:
-        return host.strip()
 
-    host = st.session_state.get("IMAGE_HOSTING_URL")
-    if host:
-        return host.strip()
+    host_input = st.text_input(
+        "Image Hosting URL (필수)",
+        value=current_host,
+        placeholder="https://example.com/images/",
+        help="Cover Image URL 생성에 사용됩니다"
+    )
 
-    return get_env("IMAGE_HOSTING_URL") or ""
+    if st.button("💾 설정 저장", use_container_width=True):
+        if host_input.strip():
+            save_user_pref("export_image_host", host_input.strip())
+            st.success("✅ 저장 완료")
+            st.rerun()
+        else:
+            st.warning("⚠️ URL을 입력해주세요")
+
+    if current_host:
+        st.caption(f"현재 설정: `{current_host}`")
+
+
+def resolve_export_host() -> str:
+    """저장된 이미지 호스팅 URL 불러오기"""
+    return (
+            get_user_pref("export_image_host")
+            or get_user_pref("copy_image_host")
+            or get_user_pref("image_host")
+            or get_env("IMAGE_HOSTING_URL")
+            or ""
+    ).strip()
 
 
 # ──────────────────────────────────────────────
-# 파일 분류 및 처리 함수
+# Shopee Mass Update 파일 대응 로더
 # ──────────────────────────────────────────────
-def _target_tab(filename: str) -> Optional[str]:
-    """
-    기존 item_uploader.upload_apply와 동일한 규칙으로 파일 분류
-    파일명에 basic/media/sales 키워드 포함 여부로 판단
-    """
-    low = filename.lower()
-    if "basic" in low:
-        return "BASIC"
-    if "media" in low:
-        return "MEDIA"
-    if "sales" in low:
-        return "SALES"
-    return None
+def find_header_row(df_preview: pd.DataFrame) -> int:
+    """Shopee 파일에서 실제 헤더 행 위치 자동 감지"""
+    shopee_keywords = {
+        "product id", "productid", "item id", "itemid",
+        "parent sku", "parentsku", "psku",
+        "seller sku", "sellersku", "variation sku",
+        "product name", "item name", "category",
+        "variation name", "option name"
+    }
+
+    for i, row in df_preview.iterrows():
+        if i >= 10: break
+
+        row_values = set()
+        for val in row.values:
+            if pd.notna(val):
+                normalized = str(val).lower().strip().replace(" ", "").replace("_", "")
+                row_values.add(normalized)
+
+        # 키워드 2개 이상 매칭되면 헤더로 판단
+        if len(row_values.intersection(shopee_keywords)) >= 2:
+            return i
+
+    return 0
 
 
-def classify_files(uploaded_files) -> Tuple[Optional[any], Optional[any], Optional[any]]:
-    """업로드된 파일들을 자동 분류하여 반환"""
-    basic_file = None
-    media_file = None
-    sales_file = None
-
-    for file in uploaded_files:
-        file_type = _target_tab(file.name)
-        if file_type == "BASIC":
-            basic_file = file
-        elif file_type == "MEDIA":
-            media_file = file
-        elif file_type == "SALES":
-            sales_file = file
-
-    return basic_file, media_file, sales_file
-
-
-def load_local_file(file) -> pd.DataFrame:
-    """업로드된 파일을 DataFrame으로 변환"""
+def load_local_file_safe(file) -> pd.DataFrame:
+    """안전한 파일 로드 (freezePanes 오류 방지 + 동적 헤더 감지)"""
     if file is None:
         return pd.DataFrame()
 
     try:
         if file.name.endswith('.csv'):
-            return pd.read_csv(file)
-        else:
-            return pd.read_excel(file)
+            return pd.read_csv(file, dtype=str).fillna('')
+
+        try:
+            # 1. 구조 파악용 미리보기
+            df_preview = pd.read_excel(file, header=None, nrows=10, engine='openpyxl')
+            header_row = find_header_row(df_preview)
+
+            # 2. 실제 데이터 로드
+            file.seek(0)
+            df = pd.read_excel(file, header=header_row, engine='openpyxl', dtype=str)
+            df = df.fillna('').dropna(how='all')
+            return df
+
+        except Exception:
+            # 3. 폴백 방식
+            file.seek(0)
+            return pd.read_excel(file, dtype=str, engine='openpyxl').fillna('')
+
     except Exception as e:
         st.error(f"파일 로드 실패 ({file.name}): {str(e)}")
+        st.info("💡 Excel에서 '다른 이름으로 저장' 후 재시도하세요.")
         return pd.DataFrame()
 
 
 # ──────────────────────────────────────────────
-# 데이터 병합 및 변환 로직
+# 파일 분류 및 컬럼 매칭
 # ──────────────────────────────────────────────
-def find_column(target: str, df_columns: List[str]) -> Optional[str]:
-    """header_key 함수를 사용한 지능형 컬럼 매칭"""
+def classify_files(uploaded_files):
+    """파일명 키워드로 자동 분류"""
+    basic, media, sales = None, None, None
+    for file in uploaded_files:
+        low = file.name.lower()
+        if "basic" in low:
+            basic = file
+        elif "media" in low:
+            media = file
+        elif "sales" in low:
+            sales = file
+    return basic, media, sales
+
+
+def find_column_flexible(target: str, df_columns: List[str], aliases: List[str] = []) -> Optional[str]:
+    """유연한 컬럼 검색 (정확 → 별칭 → 부분 매칭)"""
     target_key = header_key(target)
+
+    # 1. 정확 매칭
     for col in df_columns:
-        if header_key(col) == target_key:
+        if header_key(str(col)) == target_key:
             return col
+
+    # 2. 별칭 매칭
+    for alias in aliases:
+        alias_key = header_key(alias)
+        for col in df_columns:
+            if header_key(str(col)) == alias_key:
+                return col
+
+    # 3. 부분 매칭
+    for col in df_columns:
+        col_key = header_key(str(col))
+        if target_key in col_key or col_key in target_key:
+            return col
+
     return None
 
 
+# ──────────────────────────────────────────────
+# 데이터 병합 및 변환
+# ──────────────────────────────────────────────
 def generate_cover_image_url(row: pd.Series, image_host: str, shop_code: str) -> str:
-    """
-    기존 automation_steps.py Step 6과 동일한 Cover Image URL 생성 규칙
-
-    우선순위:
-    1. PSKU(Parent SKU) 우선 사용
-    2. PSKU가 없으면 SKU 사용
-    3. 형식: {host}{sku}_C_{shop_code}.jpg
-    """
+    """Cover Image URL 생성 (Step 6 규칙: PSKU 우선 → SKU)"""
     if not image_host or not shop_code:
         return ""
 
     if not image_host.endswith('/'):
         image_host += '/'
 
-    # Parent SKU 우선 규칙 (Step 6과 동일)
     psku = str(row.get('PSKU', '') or '').strip()
     sku = str(row.get('SKU', '') or '').strip()
 
     sku_for_url = psku if psku else sku
 
-    if sku_for_url:
-        return f"{image_host}{sku_for_url}_C_{shop_code}.jpg"
-
-    return ""
+    return f"{image_host}{sku_for_url}_C_{shop_code}.jpg" if sku_for_url else ""
 
 
-def merge_and_convert_data(
-        df_basic: pd.DataFrame,
-        df_sales: pd.DataFrame,
-        df_media: pd.DataFrame,
-        image_host: str,
-        shop_code: str
-) -> pd.DataFrame:
-    """
-    3개 데이터프레임을 병합하고 Shopee 형식으로 변환
+def merge_and_convert_data(df_basic, df_sales, df_media, image_host, shop_code):
+    """3개 데이터프레임을 병합하고 Shopee 형식으로 변환"""
 
-    병합 순서:
-    1. SALES를 기준으로 BASIC과 MEDIA를 PSKU로 연결
-    2. Cover Image는 Step 6 규칙으로 생성
-    3. 기타 이미지는 호스팅 URL + 파일명으로 처리
-    4. 최종 컬럼 순서 정렬
-    """
+    # 1. 필수 컬럼 매칭 (Shopee 전용 컬럼명 지원)
+    psku_basic = find_column_flexible('PSKU', df_basic.columns,
+                                      ['Product ID', 'ProductID', 'Item ID', 'et_title_product_id'])
 
-    # 1. 필수 컬럼 검증 및 매핑
-    psku_basic = find_column('PSKU', df_basic.columns) or find_column('Product ID', df_basic.columns)
-    psku_sales = find_column('PSKU', df_sales.columns) or find_column('Parent SKU', df_sales.columns)
-    psku_media = find_column('PSKU', df_media.columns) or find_column('Product ID', df_media.columns)
-    sku_sales = find_column('SKU', df_sales.columns) or find_column('Seller SKU', df_sales.columns)
+    psku_sales = find_column_flexible('PSKU', df_sales.columns,
+                                      ['Parent SKU', 'ParentSKU', 'Product ID', 'et_title_parent_sku'])
 
-    if not all([psku_basic, psku_sales, psku_media, sku_sales]):
-        missing = []
-        if not psku_basic: missing.append("BASIC: PSKU/Product ID")
-        if not psku_sales: missing.append("SALES: PSKU/Parent SKU")
-        if not psku_media: missing.append("MEDIA: PSKU/Product ID")
-        if not sku_sales: missing.append("SALES: SKU/Seller SKU")
-        raise ValueError(f"필수 컬럼 누락:\n• " + "\n• ".join(missing))
+    sku_sales = find_column_flexible('SKU', df_sales.columns,
+                                     ['Seller SKU', 'SellerSKU', 'Variation SKU', 'et_title_child_sku'])
 
-    # 2. 컬럼명 통일 (병합 키)
+    psku_media = find_column_flexible('PSKU', df_media.columns,
+                                      ['Product ID', 'ProductID', 'Item ID', 'et_title_product_id'])
+
+    # 디버깅 정보 제공
+    with st.expander("🔍 컬럼 매칭 결과"):
+        st.write(f"**BASIC PSKU 매칭:** `{psku_basic}`")
+        st.write(f"**SALES PSKU 매칭:** `{psku_sales}`")
+        st.write(f"**SALES SKU 매칭:** `{sku_sales}`")
+        st.write(f"**MEDIA PSKU 매칭:** `{psku_media}`")
+
+    # 필수 컬럼 검증
+    missing = []
+    if not psku_basic: missing.append("BASIC: PSKU/Product ID 계열")
+    if not psku_sales: missing.append("SALES: PSKU/Parent SKU 계열")
+    if not sku_sales: missing.append("SALES: SKU/Seller SKU 계열")
+    if not psku_media: missing.append("MEDIA: PSKU/Product ID 계열")
+
+    if missing:
+        raise ValueError(f"필수 컬럼을 찾을 수 없습니다:\n• " + "\n• ".join(missing))
+
+    # 2. 컬럼명 통일
     df_basic = df_basic.rename(columns={psku_basic: 'PSKU'})
     df_sales = df_sales.rename(columns={psku_sales: 'PSKU', sku_sales: 'SKU'})
     df_media = df_media.rename(columns={psku_media: 'PSKU'})
 
-    # 3. 병합 실행 (Left Join)
+    # 3. 데이터 타입 통일
+    for df in [df_basic, df_sales, df_media]:
+        if 'PSKU' in df.columns:
+            df['PSKU'] = df['PSKU'].astype(str).str.strip()
+        if 'SKU' in df.columns:
+            df['SKU'] = df['SKU'].astype(str).str.strip()
+
+    # 4. 병합 실행
     try:
-        # Sales + Basic
-        merged_df = pd.merge(
-            df_sales,
-            df_basic,
-            on='PSKU',
-            how='left',
-            suffixes=('', '_basic')
-        )
-
-        # + Media
-        merged_df = pd.merge(
-            merged_df,
-            df_media,
-            on='PSKU',
-            how='left',
-            suffixes=('', '_media')
-        )
-
+        merged_df = pd.merge(df_sales, df_basic, on='PSKU', how='left', suffixes=('', '_basic'))
+        merged_df = pd.merge(merged_df, df_media, on='PSKU', how='left', suffixes=('', '_media'))
     except Exception as e:
         raise ValueError(f"데이터 병합 실패: {str(e)}")
 
-    # 4. 이미지 URL 처리 (Cover Image 제외)
+    # 5. 이미지 URL 처리 (Cover Image 제외)
     if image_host:
         if not image_host.endswith('/'):
             image_host += '/'
 
-        # Cover Image를 제외한 나머지 이미지 컬럼 처리
         image_cols = [col for col in merged_df.columns
-                      if any(keyword in col.lower() for keyword in ['image', 'img'])
-                      and 'cover' not in col.lower()]
+                      if any(k in str(col).lower() for k in ['image', 'img'])
+                      and 'cover' not in str(col).lower()]
 
         for col in image_cols:
             merged_df[col] = merged_df[col].apply(
                 lambda x: f"{image_host}{x}"
-                if pd.notna(x) and str(x).strip() and not str(x).startswith(("http://", "https://"))
-                else x
+                if pd.notna(x) and str(x).strip() and not str(x).startswith(("http", "https"))
+                else str(x) if pd.notna(x) else ""
             )
 
-    # 5. 최종 컬럼 구성
+    # 6. 최종 컬럼 구성
     target_columns = [
         "Category", "PSKU", "Product Name", "Variation Name1",
         "Option for Variation 1", "Image per Variation", "SKU",
@@ -239,29 +280,29 @@ def merge_and_convert_data(
 
     final_df = pd.DataFrame()
     for target_col in target_columns:
-        source_col = find_column(target_col, merged_df.columns)
-        if source_col and target_col != "Cover image":  # Cover image는 별도 생성
-            final_df[target_col] = merged_df[source_col]
-        else:
+        if target_col == "Cover image":
             final_df[target_col] = ""
+        else:
+            source_col = find_column_flexible(target_col, merged_df.columns)
+            final_df[target_col] = merged_df[source_col] if source_col else ""
 
-    # 6. Cover Image URL 생성 (Step 6 규칙 적용)
+    # 7. Cover Image URL 생성 (Step 6 규칙 적용)
     final_df['Cover image'] = final_df.apply(
         lambda row: generate_cover_image_url(row, image_host, shop_code),
         axis=1
     )
 
-    # 7. 카테고리 숫자 코드 제거
+    # 8. 카테고리 숫자 코드 제거
     if 'Category' in final_df.columns:
-        final_df['Category'] = final_df['Category'].str.replace(
+        final_df['Category'] = final_df['Category'].astype(str).str.replace(
             r'^\s*\d+\s*-\s*', '', regex=True
-        )
+        ).replace('nan', '')
 
     return final_df
 
 
 # ──────────────────────────────────────────────
-# 엑셀 생성 함수 (단일 탭)
+# 엑셀 생성 (단일 탭)
 # ──────────────────────────────────────────────
 def create_excel_file(final_df: pd.DataFrame) -> io.BytesIO:
     """단일 탭 'Shopee_Upload' 엑셀 파일 생성"""
@@ -270,7 +311,6 @@ def create_excel_file(final_df: pd.DataFrame) -> io.BytesIO:
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
         final_df.to_excel(writer, index=False, sheet_name='Shopee_Upload')
 
-        # 워크시트 포맷팅
         workbook = writer.book
         worksheet = writer.sheets['Shopee_Upload']
 
@@ -284,7 +324,7 @@ def create_excel_file(final_df: pd.DataFrame) -> io.BytesIO:
             'valign': 'vcenter'
         })
 
-        # 헤더 행 포맷 적용
+        # 헤더 행 적용
         for col_num, value in enumerate(final_df.columns.values):
             worksheet.write(0, col_num, value, header_format)
 
@@ -306,38 +346,32 @@ def create_excel_file(final_df: pd.DataFrame) -> io.BytesIO:
 # ──────────────────────────────────────────────
 # 메인 UI
 # ──────────────────────────────────────────────
-
-# 현재 설정된 Image Host 표시
 current_host = resolve_export_host()
+
 if current_host:
-    st.success(f"✅ **사용 중인 이미지 호스팅 URL:** `{current_host}`")
-    st.caption("💡 설정 변경은 좌측 사이드바에서 가능합니다.")
+    st.success(f"✅ **이미지 호스팅 URL:** `{current_host}`")
 else:
     st.error("❌ **이미지 호스팅 URL이 설정되지 않았습니다.**")
-    st.warning("⚠️ 좌측 사이드바에서 'Image Hosting URL'을 설정한 후 '💾 설정 저장'을 클릭해주세요.")
+    st.warning("👈 좌측 사이드바에서 URL을 설정해주세요.")
 
 st.subheader("📁 파일 및 설정")
 
 col_upload, col_shop = st.columns([3, 1])
 
 with col_upload:
-    # 일괄 파일 업로드
     uploaded_files = st.file_uploader(
         "BASIC, MEDIA, SALES 파일을 모두 선택하세요",
         type=['xlsx', 'xls', 'csv'],
-        accept_multiple_files=True,
-        help="파일명에 basic/media/sales 키워드가 포함되어야 합니다.\n예: product_basic.xlsx, item_media.xlsx, sales_data.xlsx"
+        accept_multiple_files=True
     )
 
 with col_shop:
-    # 샵 코드 입력
     shop_code = st.text_input(
         "샵 코드 (필수)",
         placeholder="예: RO, 01",
-        help="Cover Image URL 생성에 사용됩니다\n형식: {SKU}_C_{샵코드}.jpg"
+        help="Cover Image URL 생성에 사용됩니다"
     )
 
-# 파일 분류 및 상태 표시
 if uploaded_files:
     basic_file, media_file, sales_file = classify_files(uploaded_files)
 
@@ -379,10 +413,14 @@ if uploaded_files:
     if st.button("🚀 통합 엑셀 생성", type="primary", disabled=not all_ready, use_container_width=True):
         try:
             with st.spinner("데이터를 병합하고 엑셀을 생성하는 중..."):
-                # 데이터 로드
-                df_basic = load_local_file(basic_file)
-                df_sales = load_local_file(sales_file)
-                df_media = load_local_file(media_file)
+                # 안전한 파일 로드
+                df_basic = load_local_file_safe(basic_file)
+                df_sales = load_local_file_safe(sales_file)
+                df_media = load_local_file_safe(media_file)
+
+                if df_basic.empty or df_sales.empty or df_media.empty:
+                    st.error("❌ 일부 파일을 읽을 수 없습니다. 파일 형식을 확인해주세요.")
+                    st.stop()
 
                 # 병합 및 변환
                 final_df = merge_and_convert_data(
@@ -390,7 +428,7 @@ if uploaded_files:
                     current_host, shop_code
                 )
 
-                st.success(f"✅ **병합 완료!** 총 {len(final_df):,}개 행이 생성되었습니다.")
+                st.success(f"✅ **완료!** 총 {len(final_df):,}개 행이 생성되었습니다.")
 
                 # 결과 미리보기
                 st.subheader("📊 결과 미리보기")
@@ -431,4 +469,3 @@ if uploaded_files:
                 import traceback
 
                 st.code(traceback.format_exc())
-
