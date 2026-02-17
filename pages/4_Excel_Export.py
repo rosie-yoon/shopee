@@ -211,10 +211,10 @@ def generate_cover_image_url(row: pd.Series, image_host: str, shop_code: str) ->
 
 
 def merge_and_convert_data(df_basic, df_sales, df_media, image_host, shop_code):
-    """6대 문제점 완전 해결 버전"""
+    """Media Info 파일 구조 최적화 버전 - Variation 및 Item Image 완전 해결"""
 
     # ========================================
-    # 1. 강화된 컬럼 매칭 (문제 #1, #5 해결)
+    # 1. 강화된 컬럼 매핑 (Media Info 파일 집중)
     # ========================================
 
     # BASIC 파일
@@ -223,6 +223,8 @@ def merge_and_convert_data(df_basic, df_sales, df_media, image_host, shop_code):
     category_basic = find_column_flexible('Category', df_basic.columns,
                                           ['et_title_category', 'Product Category', 'Category Name',
                                            'Category ID', 'Global Category ID', 'Shopee Category Id'])
+    product_name_basic = find_column_flexible('Product Name', df_basic.columns,
+                                              ['et_title_product_name', 'Item Name', 'Title'])
 
     # SALES 파일
     psku_sales = find_column_flexible('PSKU', df_sales.columns,
@@ -246,28 +248,61 @@ def merge_and_convert_data(df_basic, df_sales, df_media, image_host, shop_code):
                 sku_sales = col
                 break
 
-    # Variation 컬럼 매칭 (문제 #5 해결)
-    var_name_sales = find_column_flexible('Variation Name1', df_sales.columns,
-                                          ['et_title_variation_name', 'Variation Name', 'Model Name'])
-    var_opt_sales = find_column_flexible('Option for Variation 1', df_sales.columns,
-                                         ['et_title_variation_option', 'Variation Option', 'Model Option'])
-
-    # MEDIA 파일
+    # MEDIA 파일 - 핵심 수정 사항
     psku_media = find_column_flexible('PSKU', df_media.columns,
                                       ['et_title_product_id', 'Product ID', 'ProductID'])
-    img_var_media = find_column_flexible('Image per Variation', df_media.columns,
-                                         ['et_title_variation_image', 'Variation Image', 'Option Image'])
+
+    # 사용자 제공 구조에 맞는 정확한 매핑
+    # Variation Name1 -> 실제로는 첫 번째 컬럼 (Option/Options)
+    var_name_media = find_column_flexible('Variation Name1', df_media.columns,
+                                          ['Variation Name1', 'Variation Name'])
+
+    # Option for Variation 1 -> 실제로는 두 번째 컬럼 (상품명)
+    var_option_media = find_column_flexible('Option for Variation 1', df_media.columns,
+                                            ['Option 1 Name', 'Option Name', 'Variation Option'])
+
+    # Image per Variation -> 실제로는 세 번째 컬럼 (URL)
+    var_image_media = find_column_flexible('Image per Variation', df_media.columns,
+                                           ['Option 1 Image', 'Option Image', 'Variation Image'])
+
+    # Item Image 1-8 매핑 강화
+    item_images = {}
+    for i in range(1, 9):
+        # 다양한 패턴으로 검색
+        aliases = [
+            f'Item Image {i}', f'Item Image{i}',
+            f'Image {i}', f'Image{i}',
+            f'Product Image {i}', f'Img {i}',
+            f'et_title_item_image_{i}'
+        ]
+        col_name = find_column_flexible(f'Item Image {i}', df_media.columns, aliases)
+        if col_name:
+            item_images[f'Item Image {i}'] = col_name
 
     # ========================================
-    # 2. 디버깅 정보 출력
+    # 2. 상세 디버깅 정보
     # ========================================
-    with st.expander("🔍 컬럼 매칭 결과"):
-        st.write("**BASIC:**", f"PSKU: `{psku_basic}`, Category: `{category_basic}`")
-        st.write("**SALES:**", f"PSKU: `{psku_sales}`, SKU: `{sku_sales}`")
-        st.write("**MEDIA:**", f"PSKU: `{psku_media}`, Image per Var: `{img_var_media}`")
+    with st.expander("🔍 컬럼 매핑 결과 (Media Info 중심)"):
+        st.write("**BASIC:**")
+        st.write(f"- PSKU: `{psku_basic}`")
+        st.write(f"- Category: `{category_basic}`")
+        st.write(f"- Product Name: `{product_name_basic}`")
 
-        if psku_sales == sku_sales:
-            st.error("⚠️ PSKU와 SKU가 같은 컬럼을 가리킵니다!")
+        st.write("**SALES:**")
+        st.write(f"- PSKU: `{psku_sales}`")
+        st.write(f"- SKU: `{sku_sales}`")
+
+        st.write("**MEDIA (핵심):**")
+        st.write(f"- PSKU: `{psku_media}`")
+        st.write(f"- Variation Name1: `{var_name_media}`")
+        st.write(f"- Option for Variation 1: `{var_option_media}`")
+        st.write(f"- Image per Variation: `{var_image_media}`")
+        st.write(f"- Item Images 매핑: {len(item_images)}개")
+        st.write(f"  {list(item_images.keys())}")
+
+        # Media 파일 구조 확인
+        st.write("**MEDIA 파일 첫 10행 (구조 확인):**")
+        st.dataframe(df_media.head(10))
 
     # ========================================
     # 3. 필수 컬럼 검증
@@ -292,43 +327,88 @@ def merge_and_convert_data(df_basic, df_sales, df_media, image_host, shop_code):
     rename_basic = {psku_basic: 'PSKU'}
     if category_basic:
         rename_basic[category_basic] = 'Category'
+    if product_name_basic:
+        rename_basic[product_name_basic] = 'Product Name'
     df_basic.rename(columns=rename_basic, inplace=True)
 
     # SALES
     rename_sales = {}
     if psku_sales: rename_sales[psku_sales] = 'PSKU'
     if sku_sales: rename_sales[sku_sales] = 'SKU'
-    if var_name_sales: rename_sales[var_name_sales] = 'Variation Name1'
-    if var_opt_sales: rename_sales[var_opt_sales] = 'Option for Variation 1'
     df_sales.rename(columns=rename_sales, inplace=True)
 
-    # MEDIA
+    # MEDIA - 핵심 수정
     rename_media = {psku_media: 'PSKU'}
-    if img_var_media:
-        rename_media[img_var_media] = 'Image per Variation'
+    if var_name_media:
+        rename_media[var_name_media] = 'Variation Name1'
+    if var_option_media:
+        rename_media[var_option_media] = 'Option for Variation 1'
+    if var_image_media:
+        rename_media[var_image_media] = 'Image per Variation'
+
+    # Item Image 컬럼명 표준화
+    for target, source in item_images.items():
+        rename_media[source] = target
+
     df_media.rename(columns=rename_media, inplace=True)
 
     # ========================================
-    # 5. PSKU 반복 입력 처리 (문제 #2 해결)
+    # 5. Media Info 파일 전처리 (핵심!)
+    # ========================================
+    # "Not Editable", "Optional" 같은 설명 행 제거
+    if len(df_media) > 0:
+        # 첫 번째 컬럼(PSKU)이 "Not Editable", "Optional", 빈값인 행 제거
+        df_media = df_media[
+            ~df_media['PSKU'].astype(str).str.lower().isin([
+                'not editable', 'optional', '', 'nan'
+            ])
+        ]
+
+        # 긴 설명 텍스트 행 제거 (50자 이상)
+        df_media = df_media[
+            df_media['PSKU'].astype(str).str.len() < 50
+            ]
+
+        # "If the product has..." 같은 설명 행 제거
+        df_media = df_media[
+            ~df_media['PSKU'].astype(str).str.contains('product has', case=False, na=False)
+        ]
+
+        df_media = df_media.reset_index(drop=True)
+
+    # ========================================
+    # 6. PSKU 반복 입력 처리
     # ========================================
     for df in [df_basic, df_sales, df_media]:
         if 'PSKU' in df.columns:
-            # 빈 문자열을 NaN으로 변환 후 앞 값으로 채우기
             df['PSKU'] = df['PSKU'].replace(r'^\s*$', pd.NA, regex=True)
             df['PSKU'] = df['PSKU'].ffill()
             df['PSKU'] = df['PSKU'].astype(str).str.strip()
 
     # ========================================
-    # 6. 데이터 병합
+    # 7. Variation Name1 전처리 (Option/Options 제거)
+    # ========================================
+    if 'Variation Name1' in df_media.columns:
+        # "Option" 또는 "Options" 텍스트를 빈 문자열로 변경
+        # 실제 값은 "Option for Variation 1"에 들어있음
+        df_media['Variation Name1'] = df_media['Variation Name1'].astype(str)
+        df_media.loc[
+            df_media['Variation Name1'].str.lower().isin(['option', 'options']),
+            'Variation Name1'
+        ] = ''
+
+    # ========================================
+    # 8. 데이터 병합
     # ========================================
     try:
+        # SALES를 기준으로 병합 (Variation 단위)
         merged_df = pd.merge(df_sales, df_basic, on='PSKU', how='left', suffixes=('', '_basic'))
         merged_df = pd.merge(merged_df, df_media, on='PSKU', how='left', suffixes=('', '_media'))
     except Exception as e:
         raise ValueError(f"데이터 병합 실패: {str(e)}")
 
     # ========================================
-    # 7. 트래시 데이터 제거 (문제 #6 해결)
+    # 9. 트래시 데이터 제거
     # ========================================
     merged_df = merged_df[
         (merged_df['PSKU'].notna()) &
@@ -338,7 +418,7 @@ def merge_and_convert_data(df_basic, df_sales, df_media, image_host, shop_code):
         ].copy().reset_index(drop=True)
 
     # ========================================
-    # 8. 최종 컬럼 구성 (문제 #4 해결: Media 원본 유지)
+    # 10. 최종 컬럼 구성
     # ========================================
     target_columns = [
         "Category", "PSKU", "Product Name", "Variation Name1",
@@ -353,9 +433,10 @@ def merge_and_convert_data(df_basic, df_sales, df_media, image_host, shop_code):
         if target_col == "Cover image":
             final_df[target_col] = ""  # 나중에 생성
         elif target_col in merged_df.columns:
-            # 원본 데이터 그대로 사용 (URL 가공 안 함)
+            # Media에서 rename된 컬럼들 직접 사용
             final_df[target_col] = merged_df[target_col]
         else:
+            # 유연한 매칭 시도
             source_col = find_column_flexible(target_col, merged_df.columns)
             if source_col:
                 final_df[target_col] = merged_df[source_col]
@@ -363,7 +444,7 @@ def merge_and_convert_data(df_basic, df_sales, df_media, image_host, shop_code):
                 final_df[target_col] = ""
 
     # ========================================
-    # 9. Cover Image URL 생성 (문제 #3 해결)
+    # 11. Cover Image URL 생성
     # ========================================
     final_df['Cover image'] = final_df.apply(
         lambda row: generate_cover_image_url(row, image_host, shop_code),
@@ -371,7 +452,7 @@ def merge_and_convert_data(df_basic, df_sales, df_media, image_host, shop_code):
     )
 
     # ========================================
-    # 10. 카테고리 숫자 코드 제거 (문제 #1 해결)
+    # 12. 카테고리 숫자 코드 제거
     # ========================================
     if 'Category' in final_df.columns:
         final_df['Category'] = final_df['Category'].astype(str).str.replace(
