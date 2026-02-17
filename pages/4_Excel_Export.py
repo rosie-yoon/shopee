@@ -317,94 +317,89 @@ def generate_cover_image_url(row: pd.Series, image_host: str, shop_code: str) ->
 # 데이터 병합 및 변환 (완전 해결 버전)
 # ──────────────────────────────────────────────
 def merge_and_convert_data(df_basic, df_sales, df_media, image_host, shop_code):
-
     import re
 
-    # -------------------------
-    # 1) 컬럼 찾기
-    # -------------------------
+    def norm(s):
+        return re.sub(r"\s+", " ", str(s or "").strip().lower())
 
-    # MEDIA
+    # --- SALES 컬럼 ---
+    psku_sales = find_parent_sku_column(df_sales.columns)
+    sku_col = find_child_sku_column(df_sales.columns, psku_sales or "")
+    variation_col = find_column_flexible("Variation Name", df_sales.columns, ["Variation Name", "Variation"])
+
+    if not psku_sales or not sku_col or not variation_col:
+        raise ValueError("SALES에서 Parent SKU / SKU / Variation Name 컬럼을 찾지 못했습니다.")
+
+    # --- MEDIA 컬럼 ---
     psku_media = find_parent_sku_column(df_media.columns)
+    if not psku_media:
+        raise ValueError("MEDIA에서 Parent SKU 컬럼을 찾지 못했습니다.")
+
+    # 네가 준 구조상 표준 컬럼명 그대로 존재
     cat_col = "Category"
     pname_col = "Product Name"
     vname_col = "Variation Name1"
 
-    # SALES
-    psku_sales = find_parent_sku_column(df_sales.columns)
-    sku_col = find_child_sku_column(df_sales.columns, psku_sales or "")
-    variation_col = find_column_flexible(
-        "Variation Name",
-        df_sales.columns,
-        ["Variation Name", "Variation"]
-    )
-
-    if not psku_media or not psku_sales or not sku_col:
-        raise ValueError("PSKU 또는 SKU 컬럼을 찾지 못했습니다.")
-
-    # -------------------------
-    # 2) SALES → SKU 매핑 생성
-    # -------------------------
-
-    def norm(s):
-        return re.sub(r"\s+", " ", str(s).strip().lower())
-
+    # --- SALES -> SKU map (PSKU + Variation Name) ---
     sku_map = {}
-
     for _, row in df_sales.iterrows():
-        key = (
-            str(row[psku_sales]).strip(),
-            norm(row[variation_col])
-        )
-        sku_map[key] = str(row[sku_col]).strip()
+        psku = str(row.get(psku_sales, "") or "").strip()
+        opt = norm(row.get(variation_col, ""))
+        sku = str(row.get(sku_col, "") or "").strip()
+        if psku and opt and sku:
+            sku_map[(psku, opt)] = sku
 
-    # -------------------------
-    # 3) MEDIA OptionN explode
-    # -------------------------
-
+    # --- MEDIA OptionN columns 탐지 (header_key 기반 + search로 강화) ---
     keys = {c: header_key(str(c)) for c in df_media.columns}
 
     option_name_cols = {}
     option_img_cols = {}
 
     for col, k in keys.items():
-        m = re.match(r"option(\d+)name", k)
+        m = re.search(r"option\s*_?(\d+)\s*_?name", k)
         if m:
             option_name_cols[int(m.group(1))] = col
 
-        m2 = re.match(r"option(\d+)image", k)
+        m2 = re.search(r"option\s*_?(\d+)\s*_?image", k)
         if m2:
             option_img_cols[int(m2.group(1))] = col
 
     if not option_name_cols:
-        raise ValueError("MEDIA에서 Option N Name 컬럼을 찾지 못했습니다.")
+        # 디버깅 정보 포함해서 실패 원인 바로 보이게
+        sample = list(keys.items())[:30]
+        raise ValueError(f"MEDIA에서 Option N Name 컬럼을 찾지 못했습니다. header_key 샘플: {sample}")
 
+    # --- Item Image 1~8 ---
+    item_cols = {}
+    for i in range(1, 9):
+        target = header_key(f"Item Image {i}")
+        found = None
+        for col, k in keys.items():
+            if k == target or (("itemimage" in k) and k.endswith(str(i))):
+                found = col
+                break
+        if found:
+            item_cols[i] = found
+
+    # --- explode & build rows ---
     out_rows = []
-
     for _, r in df_media.iterrows():
-
-        psku = str(r[psku_media]).strip()
+        psku = str(r.get(psku_media, "") or "").strip()
         if not psku:
             continue
 
-        category = str(r.get(cat_col, "")).strip()
-        pname = str(r.get(pname_col, "")).strip()
-        vname = str(r.get(vname_col, "")).strip()
+        category = str(r.get(cat_col, "") or "").strip()
+        pname = str(r.get(pname_col, "") or "").strip()
+        vname = str(r.get(vname_col, "") or "").strip()
 
-        # 공통 이미지들
-        item_imgs = {
-            f"Item Image {i}": str(r.get(f"Item Image {i}", "")).strip()
-            for i in range(1, 9)
-        }
+        item_imgs = {f"Item Image {i}": str(r.get(item_cols.get(i, ""), "") or "").strip() for i in range(1, 9)}
 
         for idx in sorted(option_name_cols.keys()):
-
-            opt_name = str(r.get(option_name_cols[idx], "")).strip()
+            opt_name = str(r.get(option_name_cols[idx], "") or "").strip()
             if not opt_name:
                 continue
 
-            opt_img = str(r.get(option_img_cols.get(idx, ""), "")).strip()
-
+            opt_img = str(r.get(option_img_cols.get(idx, ""), "") or "").strip()
             sku = sku_map.get((psku, norm(opt_name)), "")
 
             out_rows.append({
@@ -415,27 +410,21 @@ def merge_and_convert_data(df_basic, df_sales, df_media, image_host, shop_code):
                 "Option for Variation 1": opt_name,
                 "Image per Variation": opt_img,
                 "SKU": sku,
-                **item_imgs
+                **item_imgs,
             })
 
     if not out_rows:
-        raise ValueError("옵션 데이터 생성 실패. MEDIA 내용 확인 필요.")
+        raise ValueError("옵션 데이터 생성 실패. MEDIA Option 값이 비어있거나 PSKU가 비어있을 수 있습니다.")
 
     final_df = pd.DataFrame(out_rows)
 
-    # -------------------------
-    # 4) Cover image 생성
-    # -------------------------
-
+    # Cover image
     final_df["Cover image"] = final_df.apply(
         lambda row: generate_cover_image_url(row, image_host, shop_code),
         axis=1
     )
 
-    # -------------------------
-    # 5) 컬럼 순서 고정
-    # -------------------------
-
+    # 헤더 순서 고정
     final_columns = [
         "Category",
         "PSKU",
@@ -454,12 +443,12 @@ def merge_and_convert_data(df_basic, df_sales, df_media, image_host, shop_code):
         "Item Image 7",
         "Item Image 8",
     ]
-
-    for col in final_columns:
-        if col not in final_df.columns:
-            final_df[col] = ""
+    for c in final_columns:
+        if c not in final_df.columns:
+            final_df[c] = ""
 
     return final_df[final_columns].fillna("")
+
 
 
 
@@ -552,6 +541,8 @@ if uploaded_files:
                 df_basic = load_local_file_safe(basic_file)
                 df_sales = load_local_file_safe(sales_file)
                 df_media = load_local_file_safe(media_file)
+                st.write("REAL df_media.columns:", list(df_media.columns))
+                st.write("REAL df_media.columns (header_key):", [header_key(str(c)) for c in df_media.columns])
 
                 if df_basic.empty or df_sales.empty or df_media.empty:
                     st.error("❌ 파일 로드 실패. 파일 형식을 확인해주세요.")
