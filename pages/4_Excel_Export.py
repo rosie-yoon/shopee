@@ -28,7 +28,7 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
 from auth_guard import bootstrap_auth
-from user_manager import get_user_pref, save_user_pref
+from user_manager import get_user_pref
 from item_uploader.utils_common import get_env, header_key
 
 bootstrap_auth(go_home=False)
@@ -38,7 +38,7 @@ st.caption("BASIC/MEDIA/SALES 파일을 한 번에 업로드하여 Shopee 업로
 st.markdown("---")
 
 # ──────────────────────────────────────────────
-# 사이드바 설정 (이미지 호스팅 URL만)
+# 사이드바 설정 (수정된 부분)
 # ──────────────────────────────────────────────
 with st.sidebar:
     st.subheader("⚙️ 설정")
@@ -60,7 +60,11 @@ with st.sidebar:
 
     if st.button("💾 설정 저장", use_container_width=True):
         if host_input.strip():
-            save_user_pref("export_image_host", host_input.strip())
+            # 직접 세션에 저장 (save_user_pref 대신)
+            if "user_prefs" not in st.session_state:
+                st.session_state["user_prefs"] = {}
+            st.session_state["user_prefs"]["export_image_host"] = host_input.strip()
+
             st.success("✅ 저장 완료")
             st.rerun()
         else:
@@ -68,7 +72,6 @@ with st.sidebar:
 
     if current_host:
         st.caption(f"현재 설정: `{current_host}`")
-
 
 def resolve_export_host() -> str:
     """저장된 이미지 호스팅 URL 불러오기"""
