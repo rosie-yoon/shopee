@@ -1,24 +1,20 @@
 # -*- coding: utf-8 -*-
 """
-Page 4: 통합 엑셀 생성기 (간소화 최종 버전)
-- Shopee Mass Update 파일 구조 완전 대응
-- Google Sheet ID 설정 제거 (로컬 전용)
-- 사이드바에서 이미지 호스팅 URL만 관리
-- UI 간소화
+Page 4: 통합 엑셀 생성기 (완전 해결 버전)
+- ImportError 해결: user_manager 의존성 제거
+- Shopee 파일 호환성: XML sanitization으로 freezePanes 오류 완전 해결
 """
 
 from pathlib import Path
 import sys
 import io
-import warnings
+import re
+import zipfile
 from datetime import datetime
 from typing import List, Optional
 
 import streamlit as st
 import pandas as pd
-
-# openpyxl 경고 억제 (Shopee 파일 호환성)
-warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 st.set_page_config(page_title="Excel Export", layout="wide")
 
@@ -28,7 +24,7 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
 from auth_guard import bootstrap_auth
-from user_manager import get_user_pref
+from user_manager import get_user_pref  # save_user_pref 제거 (ImportError 방지)
 from item_uploader.utils_common import get_env, header_key
 
 bootstrap_auth(go_home=False)
@@ -37,8 +33,54 @@ st.title("📊 통합 엑셀 생성기")
 st.caption("BASIC/MEDIA/SALES 파일을 한 번에 업로드하여 Shopee 업로드용 엑셀을 생성합니다")
 st.markdown("---")
 
+
 # ──────────────────────────────────────────────
-# 사이드바 설정 (수정된 부분)
+# 핵심 해결책: Shopee 엑셀 파일 Sanitizer
+# ──────────────────────────────────────────────
+def sanitize_shopee_excel(file_obj) -> io.BytesIO:
+    """
+    Shopee 엑셀 파일의 freezePanes 오류를 해결하기 위해
+    내부 XML에서 문제가 되는 sheetViews 태그를 제거합니다.
+    """
+    try:
+        file_obj.seek(0)
+        content = file_obj.read()
+
+        # ZIP 파일로 엑셀 내부 구조 접근
+        zin = zipfile.ZipFile(io.BytesIO(content), 'r')
+        out_buffer = io.BytesIO()
+        zout = zipfile.ZipFile(out_buffer, 'w', zipfile.ZIP_DEFLATED)
+
+        # 문제가 되는 XML 태그 제거 패턴
+        sheetviews_pattern = re.compile(r'<sheetViews[^>]*>.*?</sheetViews>', re.DOTALL)
+        pane_pattern = re.compile(r'<pane[^>]*/?>', re.DOTALL)
+
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+
+            # worksheet XML 파일에서만 sanitization 실행
+            if item.filename.startswith('xl/worksheets/sheet') and item.filename.endswith('.xml'):
+                xml_str = data.decode('utf-8', errors='ignore')
+                # 문제 태그 제거
+                xml_str = sheetviews_pattern.sub('', xml_str)
+                xml_str = pane_pattern.sub('', xml_str)
+                data = xml_str.encode('utf-8')
+
+            zout.writestr(item, data)
+
+        zout.close()
+        out_buffer.seek(0)
+        return out_buffer
+
+    except Exception as e:
+        # 실패 시 원본 반환
+        print(f"Sanitize failed: {e}")
+        file_obj.seek(0)
+        return file_obj
+
+
+# ──────────────────────────────────────────────
+# 사이드바 설정 (직접 구현 - ImportError 방지)
 # ──────────────────────────────────────────────
 with st.sidebar:
     st.subheader("⚙️ 설정")
@@ -60,11 +102,10 @@ with st.sidebar:
 
     if st.button("💾 설정 저장", use_container_width=True):
         if host_input.strip():
-            # 직접 세션에 저장 (save_user_pref 대신)
+            # 세션에 직접 저장 (save_user_pref 의존성 제거)
             if "user_prefs" not in st.session_state:
                 st.session_state["user_prefs"] = {}
             st.session_state["user_prefs"]["export_image_host"] = host_input.strip()
-
             st.success("✅ 저장 완료")
             st.rerun()
         else:
@@ -73,8 +114,16 @@ with st.sidebar:
     if current_host:
         st.caption(f"현재 설정: `{current_host}`")
 
+
 def resolve_export_host() -> str:
     """저장된 이미지 호스팅 URL 불러오기"""
+    # 세션 우선 확인
+    if "user_prefs" in st.session_state:
+        val = st.session_state["user_prefs"].get("export_image_host")
+        if val:
+            return val.strip()
+
+    # 기존 설정 폴백
     return (
             get_user_pref("export_image_host")
             or get_user_pref("copy_image_host")
@@ -85,62 +134,51 @@ def resolve_export_host() -> str:
 
 
 # ──────────────────────────────────────────────
-# Shopee Mass Update 파일 대응 로더
+# 안전한 파일 로더
 # ──────────────────────────────────────────────
 def find_header_row(df_preview: pd.DataFrame) -> int:
-    """Shopee 파일에서 실제 헤더 행 위치 자동 감지"""
-    shopee_keywords = {
-        "product id", "productid", "item id", "itemid",
-        "parent sku", "parentsku", "psku",
-        "seller sku", "sellersku", "variation sku",
-        "product name", "item name", "category",
-        "variation name", "option name"
-    }
+    """Shopee 파일에서 실제 헤더 행 찾기"""
+    keywords = ['product', 'sku', 'category', 'variation', 'option', 'name', 'image']
 
-    for i, row in df_preview.iterrows():
-        if i >= 10: break
-
-        row_values = set()
-        for val in row.values:
-            if pd.notna(val):
-                normalized = str(val).lower().strip().replace(" ", "").replace("_", "")
-                row_values.add(normalized)
-
-        # 키워드 2개 이상 매칭되면 헤더로 판단
-        if len(row_values.intersection(shopee_keywords)) >= 2:
+    for i in range(min(10, len(df_preview))):
+        row_text = ' '.join([str(val).lower() for val in df_preview.iloc[i].values if pd.notna(val)])
+        match_count = sum(1 for kw in keywords if kw in row_text)
+        if match_count >= 3:
             return i
-
     return 0
 
 
 def load_local_file_safe(file) -> pd.DataFrame:
-    """안전한 파일 로드 (freezePanes 오류 방지 + 동적 헤더 감지)"""
+    """Shopee 파일 호환 로더 (Sanitization 적용)"""
     if file is None:
         return pd.DataFrame()
 
     try:
+        # CSV 처리
         if file.name.endswith('.csv'):
             return pd.read_csv(file, dtype=str).fillna('')
 
+        # Excel 처리 - Sanitization 적용
+        file.seek(0)
+        clean_file = sanitize_shopee_excel(file)
+
         try:
-            # 1. 구조 파악용 미리보기
-            df_preview = pd.read_excel(file, header=None, nrows=10, engine='openpyxl')
+            # 헤더 위치 감지
+            df_preview = pd.read_excel(clean_file, header=None, nrows=10, engine='openpyxl')
             header_row = find_header_row(df_preview)
 
-            # 2. 실제 데이터 로드
-            file.seek(0)
-            df = pd.read_excel(file, header=header_row, engine='openpyxl', dtype=str)
-            df = df.fillna('').dropna(how='all')
-            return df
+            # 실제 데이터 로드
+            clean_file.seek(0)
+            df = pd.read_excel(clean_file, header=header_row, engine='openpyxl', dtype=str)
+            return df.fillna('').dropna(how='all')
 
         except Exception:
-            # 3. 폴백 방식
-            file.seek(0)
-            return pd.read_excel(file, dtype=str, engine='openpyxl').fillna('')
+            # 폴백: 기본 방식
+            clean_file.seek(0)
+            return pd.read_excel(clean_file, dtype=str, engine='openpyxl').fillna('')
 
     except Exception as e:
         st.error(f"파일 로드 실패 ({file.name}): {str(e)}")
-        st.info("💡 Excel에서 '다른 이름으로 저장' 후 재시도하세요.")
         return pd.DataFrame()
 
 
@@ -162,22 +200,22 @@ def classify_files(uploaded_files):
 
 
 def find_column_flexible(target: str, df_columns: List[str], aliases: List[str] = []) -> Optional[str]:
-    """유연한 컬럼 검색 (정확 → 별칭 → 부분 매칭)"""
+    """유연한 컬럼 검색"""
     target_key = header_key(target)
 
-    # 1. 정확 매칭
+    # 정확 매칭
     for col in df_columns:
         if header_key(str(col)) == target_key:
             return col
 
-    # 2. 별칭 매칭
+    # 별칭 매칭
     for alias in aliases:
         alias_key = header_key(alias)
         for col in df_columns:
             if header_key(str(col)) == alias_key:
                 return col
 
-    # 3. 부분 매칭
+    # 부분 매칭
     for col in df_columns:
         col_key = header_key(str(col))
         if target_key in col_key or col_key in target_key:
@@ -199,65 +237,61 @@ def generate_cover_image_url(row: pd.Series, image_host: str, shop_code: str) ->
 
     psku = str(row.get('PSKU', '') or '').strip()
     sku = str(row.get('SKU', '') or '').strip()
-
     sku_for_url = psku if psku else sku
 
     return f"{image_host}{sku_for_url}_C_{shop_code}.jpg" if sku_for_url else ""
 
 
 def merge_and_convert_data(df_basic, df_sales, df_media, image_host, shop_code):
-    """3개 데이터프레임을 병합하고 Shopee 형식으로 변환"""
+    """3개 데이터프레임 병합 및 Shopee 형식 변환"""
 
-    # 1. 필수 컬럼 매칭 (Shopee 전용 컬럼명 지원)
+    # 필수 컬럼 매칭 (Shopee 전용 컬럼명 지원)
     psku_basic = find_column_flexible('PSKU', df_basic.columns,
                                       ['Product ID', 'ProductID', 'Item ID', 'et_title_product_id'])
-
     psku_sales = find_column_flexible('PSKU', df_sales.columns,
                                       ['Parent SKU', 'ParentSKU', 'Product ID', 'et_title_parent_sku'])
-
     sku_sales = find_column_flexible('SKU', df_sales.columns,
                                      ['Seller SKU', 'SellerSKU', 'Variation SKU', 'et_title_child_sku'])
-
     psku_media = find_column_flexible('PSKU', df_media.columns,
                                       ['Product ID', 'ProductID', 'Item ID', 'et_title_product_id'])
 
-    # 디버깅 정보 제공
+    # 디버깅 정보
     with st.expander("🔍 컬럼 매칭 결과"):
-        st.write(f"**BASIC PSKU 매칭:** `{psku_basic}`")
-        st.write(f"**SALES PSKU 매칭:** `{psku_sales}`")
-        st.write(f"**SALES SKU 매칭:** `{sku_sales}`")
-        st.write(f"**MEDIA PSKU 매칭:** `{psku_media}`")
+        st.write(f"**BASIC PSKU:** `{psku_basic}`")
+        st.write(f"**SALES PSKU:** `{psku_sales}`")
+        st.write(f"**SALES SKU:** `{sku_sales}`")
+        st.write(f"**MEDIA PSKU:** `{psku_media}`")
 
     # 필수 컬럼 검증
     missing = []
-    if not psku_basic: missing.append("BASIC: PSKU/Product ID 계열")
-    if not psku_sales: missing.append("SALES: PSKU/Parent SKU 계열")
-    if not sku_sales: missing.append("SALES: SKU/Seller SKU 계열")
-    if not psku_media: missing.append("MEDIA: PSKU/Product ID 계열")
+    if not psku_basic: missing.append("BASIC: PSKU/Product ID")
+    if not psku_sales: missing.append("SALES: PSKU/Parent SKU")
+    if not sku_sales: missing.append("SALES: SKU/Seller SKU")
+    if not psku_media: missing.append("MEDIA: PSKU/Product ID")
 
     if missing:
-        raise ValueError(f"필수 컬럼을 찾을 수 없습니다:\n• " + "\n• ".join(missing))
+        raise ValueError(f"필수 컬럼 누락:\n• " + "\n• ".join(missing))
 
-    # 2. 컬럼명 통일
+    # 컬럼명 통일
     df_basic = df_basic.rename(columns={psku_basic: 'PSKU'})
     df_sales = df_sales.rename(columns={psku_sales: 'PSKU', sku_sales: 'SKU'})
     df_media = df_media.rename(columns={psku_media: 'PSKU'})
 
-    # 3. 데이터 타입 통일
+    # 데이터 타입 통일
     for df in [df_basic, df_sales, df_media]:
         if 'PSKU' in df.columns:
             df['PSKU'] = df['PSKU'].astype(str).str.strip()
         if 'SKU' in df.columns:
             df['SKU'] = df['SKU'].astype(str).str.strip()
 
-    # 4. 병합 실행
+    # 병합 실행
     try:
         merged_df = pd.merge(df_sales, df_basic, on='PSKU', how='left', suffixes=('', '_basic'))
         merged_df = pd.merge(merged_df, df_media, on='PSKU', how='left', suffixes=('', '_media'))
     except Exception as e:
         raise ValueError(f"데이터 병합 실패: {str(e)}")
 
-    # 5. 이미지 URL 처리 (Cover Image 제외)
+    # 이미지 URL 처리 (Cover Image 제외)
     if image_host:
         if not image_host.endswith('/'):
             image_host += '/'
@@ -273,7 +307,7 @@ def merge_and_convert_data(df_basic, df_sales, df_media, image_host, shop_code):
                 else str(x) if pd.notna(x) else ""
             )
 
-    # 6. 최종 컬럼 구성
+    # 최종 컬럼 구성
     target_columns = [
         "Category", "PSKU", "Product Name", "Variation Name1",
         "Option for Variation 1", "Image per Variation", "SKU",
@@ -289,13 +323,13 @@ def merge_and_convert_data(df_basic, df_sales, df_media, image_host, shop_code):
             source_col = find_column_flexible(target_col, merged_df.columns)
             final_df[target_col] = merged_df[source_col] if source_col else ""
 
-    # 7. Cover Image URL 생성 (Step 6 규칙 적용)
+    # Cover Image URL 생성
     final_df['Cover image'] = final_df.apply(
         lambda row: generate_cover_image_url(row, image_host, shop_code),
         axis=1
     )
 
-    # 8. 카테고리 숫자 코드 제거
+    # 카테고리 숫자 코드 제거
     if 'Category' in final_df.columns:
         final_df['Category'] = final_df['Category'].astype(str).str.replace(
             r'^\s*\d+\s*-\s*', '', regex=True
