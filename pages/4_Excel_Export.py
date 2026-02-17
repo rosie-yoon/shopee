@@ -320,13 +320,13 @@ def merge_and_convert_data(df_basic, df_sales, df_media, image_host, shop_code):
     import re
 
     # =========================
-    # 1️⃣ 문자열 정규화 강화
+    # 1️⃣ 정규화 함수 (Step1 방식 강화)
     # =========================
     def clean(s):
         s = str(s or "")
-        s = s.replace("\u200b", "")   # zero width space 제거
-        s = s.replace("\xa0", " ")    # 특수 공백 제거
-        s = re.sub(r"\(.*?\)", "", s) # 괄호 제거
+        s = s.replace("\u200b", "")
+        s = s.replace("\xa0", " ")
+        s = re.sub(r"\(.*?\)", "", s)
         s = re.sub(r"\s+", " ", s)
         return s.strip()
 
@@ -334,42 +334,45 @@ def merge_and_convert_data(df_basic, df_sales, df_media, image_host, shop_code):
         return clean(s).lower()
 
     # =========================
-    # 2️⃣ SALES 컬럼 찾기
+    # 2️⃣ SALES 기준 매핑 생성 (Product ID 기반)
     # =========================
+    pid_sales = find_column_flexible("Product ID", df_sales.columns, ["Product ID"])
     psku_sales = find_parent_sku_column(df_sales.columns)
     sku_col = find_child_sku_column(df_sales.columns, psku_sales or "")
-    variation_col = find_column_flexible("Variation Name", df_sales.columns, ["Variation Name", "Variation"])
+    var_col = find_column_flexible("Variation Name", df_sales.columns, ["Variation Name", "Variation"])
 
-    if not psku_sales or not sku_col or not variation_col:
+    if not pid_sales or not sku_col or not var_col:
         raise ValueError("SALES 컬럼 매핑 실패")
+
+    # (Product ID, normalized option) → SKU
+    sku_map = {}
+    psku_map = {}
+
+    for _, row in df_sales.iterrows():
+        pid = clean(row.get(pid_sales))
+        opt = norm(row.get(var_col))
+        sku = clean(row.get(sku_col))
+        psku = clean(row.get(psku_sales))
+
+        if pid and opt and sku:
+            sku_map[(pid, opt)] = sku
+
+        if pid and psku:
+            psku_map[pid] = psku
 
     # =========================
     # 3️⃣ MEDIA 컬럼 찾기
     # =========================
-    psku_media = find_parent_sku_column(df_media.columns)
-
+    pid_media = find_column_flexible("Product ID", df_media.columns)
     cat_col = find_column_flexible("Product Category", df_media.columns, ["Category"])
     pname_col = find_column_flexible("Product Name", df_media.columns)
     vname_col = find_column_flexible("Variation 1", df_media.columns, ["Variation Name1"])
 
-    if not psku_media:
-        raise ValueError("MEDIA Parent SKU 컬럼 없음")
+    if not pid_media:
+        raise ValueError("MEDIA Product ID 컬럼 없음")
 
     # =========================
-    # 4️⃣ SKU 매핑 생성
-    # =========================
-    sku_map = {}
-
-    for _, row in df_sales.iterrows():
-        psku = clean(row.get(psku_sales, ""))
-        opt = norm(row.get(variation_col, ""))
-        sku = clean(row.get(sku_col, ""))
-
-        if psku and opt and sku:
-            sku_map[(psku, opt)] = sku
-
-    # =========================
-    # 5️⃣ MEDIA Option 컬럼 탐지
+    # 4️⃣ MEDIA OptionN 탐지 (Shopee 신규 구조)
     # =========================
     keys = {c: header_key(str(c)) for c in df_media.columns}
 
@@ -386,7 +389,7 @@ def merge_and_convert_data(df_basic, df_sales, df_media, image_host, shop_code):
             option_img_cols[int(m2.group(1))] = col
 
     # =========================
-    # 6️⃣ Item Image 1~8
+    # 5️⃣ Item Image 1~8
     # =========================
     item_cols = {}
     for i in range(1, 9):
@@ -397,43 +400,42 @@ def merge_and_convert_data(df_basic, df_sales, df_media, image_host, shop_code):
                 break
 
     # =========================
-    # 7️⃣ explode + 완전 trash 제거
+    # 6️⃣ explode (Step1 방식)
     # =========================
     out_rows = []
 
     for _, r in df_media.iterrows():
 
-        psku = clean(r.get(psku_media, ""))
-        if not psku:
+        pid = clean(r.get(pid_media))
+        if not pid:
             continue
 
-        category = clean(r.get(cat_col, ""))
-        pname = clean(r.get(pname_col, ""))
-        vname = clean(r.get(vname_col, ""))
+        psku = psku_map.get(pid, "")
+        category = clean(r.get(cat_col))
+        pname = clean(r.get(pname_col))
+        vname = clean(r.get(vname_col))
 
         item_imgs = {
-            f"Item Image {i}": clean(r.get(item_cols.get(i, ""), ""))
+            f"Item Image {i}": clean(r.get(item_cols.get(i), ""))
             for i in range(1, 9)
         }
 
+        # 👉 실제 값이 있는 option만 수집
+        valid_options = []
+
         for idx in sorted(option_name_cols.keys()):
-
-            raw_value = r.get(option_name_cols[idx], "")
-            opt_name = clean(raw_value)
-
-            # 🔥 완전 필터
-            if not opt_name:
+            raw = clean(r.get(option_name_cols[idx]))
+            if not raw:
                 continue
-            if len(opt_name) < 2:
+            if len(raw) < 2:
                 continue
-            if opt_name.lower() in ["not editable", "optional", "-", "nan"]:
-                continue
-            if opt_name == psku:
-                continue
+            valid_options.append((idx, raw))
 
-            opt_img = clean(r.get(option_img_cols.get(idx, ""), ""))
+        # 👉 여기서 2~58행 trash 원천 차단
+        for idx, opt_name in valid_options:
 
-            sku = sku_map.get((psku, norm(opt_name)), "")
+            opt_img = clean(r.get(option_img_cols.get(idx)))
+            sku = sku_map.get((pid, norm(opt_name)), "")
 
             out_rows.append({
                 "Category": category,
@@ -449,7 +451,7 @@ def merge_and_convert_data(df_basic, df_sales, df_media, image_host, shop_code):
     final_df = pd.DataFrame(out_rows)
 
     # =========================
-    # 8️⃣ Cover image
+    # 7️⃣ Cover Image
     # =========================
     final_df["Cover image"] = final_df.apply(
         lambda row: generate_cover_image_url(row, image_host, shop_code),
@@ -457,7 +459,7 @@ def merge_and_convert_data(df_basic, df_sales, df_media, image_host, shop_code):
     )
 
     # =========================
-    # 9️⃣ 컬럼 순서 고정
+    # 8️⃣ 컬럼 순서 고정
     # =========================
     final_columns = [
         "Category",
