@@ -317,177 +317,97 @@ def generate_cover_image_url(row: pd.Series, image_host: str, shop_code: str) ->
 # 데이터 병합 및 변환 (완전 해결 버전)
 # ──────────────────────────────────────────────
 def merge_and_convert_data(df_basic, df_sales, df_media, image_host, shop_code):
-    """
-    SKU 기반 통합 (완전 정리 버전)
-    - MEDIA 중심 1행 = 1 SKU
-    - SALES에서 (PSKU, Option) → SKU 매핑
-    - BASIC은 Product Name 보조
-    """
 
     import re
 
     # -------------------------
-    # 0) 유틸
+    # 1) 컬럼 찾기
     # -------------------------
-    def norm(s):
-        s = (s or "").strip().lower()
-        s = re.sub(r"\s+", " ", s)
-        return s
-
-    def col_by_key(cols, target, aliases=None):
-        aliases = aliases or []
-        return find_column_flexible(target, list(cols), aliases)
-
-    def fallback_col(df, idx):
-        cols = list(df.columns)
-        return cols[idx] if 0 <= idx < len(cols) else None
-
-    # -------------------------
-    # 1) 컬럼 탐색
-    # -------------------------
-
-    # BASIC
-    psku_basic = find_parent_sku_column(df_basic.columns)
-    pname_basic = col_by_key(df_basic.columns, "Product Name",
-                             ["Item Name", "Title", "Name"])
-
-    # SALES
-    psku_sales = find_parent_sku_column(df_sales.columns)
-    sku_sales = find_child_sku_column(df_sales.columns, psku_sales or "")
-    opt_sales = col_by_key(
-        df_sales.columns,
-        "Variation",
-        ["Variation Name", "Variation Option", "Option",
-         "Option Name", "Model", "Type"]
-    )
 
     # MEDIA
     psku_media = find_parent_sku_column(df_media.columns)
+    cat_col = "Category"
+    pname_col = "Product Name"
+    vname_col = "Variation Name1"
 
-    cat_media = col_by_key(df_media.columns, "Category",
-                           ["Product Category", "Category Name"])
-    if not cat_media:
-        cat_media = fallback_col(df_media, 3)  # D열 fallback
+    # SALES
+    psku_sales = find_parent_sku_column(df_sales.columns)
+    sku_col = find_child_sku_column(df_sales.columns, psku_sales or "")
+    variation_col = find_column_flexible(
+        "Variation Name",
+        df_sales.columns,
+        ["Variation Name", "Variation"]
+    )
 
-    pname_media = col_by_key(df_media.columns, "Product Name",
-                             ["Item Name", "Name"])
-
-    vname_media = col_by_key(df_media.columns, "Variation Name1",
-                             ["Variation Name", "Variation"])
-    if not vname_media:
-        vname_media = fallback_col(df_media, 15)  # P열 fallback
-
-    # -------------------------
-    # 2) MEDIA OptionN 탐지 (강화 버전)
-    # -------------------------
-    keys = {c: header_key(str(c)) for c in df_media.columns}
-    optN_name_cols = {}
-    optN_img_cols = {}
-
-    for col, k in keys.items():
-        m = re.search(r"option\s*_?(\d+)\s*_?name", k)
-        if m:
-            optN_name_cols[int(m.group(1))] = col
-
-        m2 = re.search(r"option\s*_?(\d+)\s*_?image", k)
-        if m2:
-            optN_img_cols[int(m2.group(1))] = col
-
-    # Item Images
-    item_img_cols = {}
-    for i in range(1, 9):
-        target = header_key(f"Item Image {i}")
-        for col, k in keys.items():
-            if k.endswith(f"itemimage{i}") or k == target:
-                item_img_cols[i] = col
-                break
+    if not psku_media or not psku_sales or not sku_col:
+        raise ValueError("PSKU 또는 SKU 컬럼을 찾지 못했습니다.")
 
     # -------------------------
-    # 3) 기본 검증
+    # 2) SALES → SKU 매핑 생성
     # -------------------------
-    if not psku_media:
-        raise ValueError("MEDIA: Parent SKU 컬럼을 찾을 수 없습니다.")
-    if not psku_sales or not sku_sales:
-        raise ValueError("SALES: Parent SKU / SKU 컬럼을 찾을 수 없습니다.")
 
-    # -------------------------
-    # 4) Rename
-    # -------------------------
-    b = df_basic.copy()
-    s = df_sales.copy()
-    m = df_media.copy()
+    def norm(s):
+        return re.sub(r"\s+", " ", str(s).strip().lower())
 
-    if psku_basic:
-        b.rename(columns={psku_basic: "PSKU"}, inplace=True)
-    if pname_basic:
-        b.rename(columns={pname_basic: "Product Name"}, inplace=True)
-
-    s.rename(columns={
-        psku_sales: "PSKU",
-        sku_sales: "SKU",
-        opt_sales: "_OPT_RAW" if opt_sales else None
-    }, inplace=True)
-
-    m_ren = {psku_media: "PSKU"}
-    if cat_media: m_ren[cat_media] = "Category"
-    if pname_media: m_ren[pname_media] = "Product Name"
-    if vname_media: m_ren[vname_media] = "Variation Name1"
-
-    for i, col in item_img_cols.items():
-        m_ren[col] = f"Item Image {i}"
-
-    m.rename(columns={k: v for k, v in m_ren.items() if k}, inplace=True)
-
-    # PSKU forward fill (MEDIA만)
-    m["PSKU"] = m["PSKU"].replace(r"^\s*$", pd.NA, regex=True).ffill().astype(str).str.strip()
-
-    # -------------------------
-    # 5) SALES SKU 매핑 테이블
-    # -------------------------
     sku_map = {}
 
-    if "_OPT_RAW" in s.columns:
-        s["_OPT_NORM"] = s["_OPT_RAW"].astype(str).map(norm)
-        for _, row in s.iterrows():
-            key = (str(row["PSKU"]).strip(), row["_OPT_NORM"])
-            if key[0] and key[1]:
-                sku_map[key] = str(row["SKU"]).strip()
-
-    # BASIC Product Name map
-    pname_map = {}
-    if "PSKU" in b.columns and "Product Name" in b.columns:
-        for _, row in b.iterrows():
-            pname_map[str(row["PSKU"]).strip()] = str(row["Product Name"]).strip()
+    for _, row in df_sales.iterrows():
+        key = (
+            str(row[psku_sales]).strip(),
+            norm(row[variation_col])
+        )
+        sku_map[key] = str(row[sku_col]).strip()
 
     # -------------------------
-    # 6) MEDIA → 최종 row 생성
+    # 3) MEDIA OptionN explode
     # -------------------------
-    out = []
 
-    for _, r in m.iterrows():
-        psku = str(r.get("PSKU", "")).strip()
+    keys = {c: header_key(str(c)) for c in df_media.columns}
+
+    option_name_cols = {}
+    option_img_cols = {}
+
+    for col, k in keys.items():
+        m = re.match(r"option(\d+)name", k)
+        if m:
+            option_name_cols[int(m.group(1))] = col
+
+        m2 = re.match(r"option(\d+)image", k)
+        if m2:
+            option_img_cols[int(m2.group(1))] = col
+
+    if not option_name_cols:
+        raise ValueError("MEDIA에서 Option N Name 컬럼을 찾지 못했습니다.")
+
+    out_rows = []
+
+    for _, r in df_media.iterrows():
+
+        psku = str(r[psku_media]).strip()
         if not psku:
             continue
 
-        category = str(r.get("Category", "")).strip()
-        pname = str(r.get("Product Name", "")).strip() or pname_map.get(psku, "")
-        vname = str(r.get("Variation Name1", "")).strip()
+        category = str(r.get(cat_col, "")).strip()
+        pname = str(r.get(pname_col, "")).strip()
+        vname = str(r.get(vname_col, "")).strip()
 
+        # 공통 이미지들
         item_imgs = {
             f"Item Image {i}": str(r.get(f"Item Image {i}", "")).strip()
             for i in range(1, 9)
         }
 
-        # OptionN 구조 explode
-        for n, name_col in sorted(optN_name_cols.items()):
-            opt_name = str(r.get(name_col, "")).strip()
+        for idx in sorted(option_name_cols.keys()):
+
+            opt_name = str(r.get(option_name_cols[idx], "")).strip()
             if not opt_name:
                 continue
 
-            opt_img = str(r.get(optN_img_cols.get(n, ""), "")).strip()
+            opt_img = str(r.get(option_img_cols.get(idx, ""), "")).strip()
+
             sku = sku_map.get((psku, norm(opt_name)), "")
 
-            out.append({
+            out_rows.append({
                 "Category": category,
                 "PSKU": psku,
                 "Product Name": pname,
@@ -498,22 +418,24 @@ def merge_and_convert_data(df_basic, df_sales, df_media, image_host, shop_code):
                 **item_imgs
             })
 
-    if not out:
-        raise ValueError("옵션 데이터를 생성하지 못했습니다. MEDIA 구조 확인 필요.")
+    if not out_rows:
+        raise ValueError("옵션 데이터 생성 실패. MEDIA 내용 확인 필요.")
 
-    final_df = pd.DataFrame(out)
+    final_df = pd.DataFrame(out_rows)
 
     # -------------------------
-    # 7) Cover Image
+    # 4) Cover image 생성
     # -------------------------
+
     final_df["Cover image"] = final_df.apply(
         lambda row: generate_cover_image_url(row, image_host, shop_code),
         axis=1
     )
 
     # -------------------------
-    # 8) 최종 컬럼 순서
+    # 5) 컬럼 순서 고정
     # -------------------------
+
     final_columns = [
         "Category",
         "PSKU",
@@ -538,6 +460,7 @@ def merge_and_convert_data(df_basic, df_sales, df_media, image_host, shop_code):
             final_df[col] = ""
 
     return final_df[final_columns].fillna("")
+
 
 
 
