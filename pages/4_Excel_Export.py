@@ -317,150 +317,174 @@ def generate_cover_image_url(row: pd.Series, image_host: str, shop_code: str) ->
 # 데이터 병합 및 변환 (완전 해결 버전)
 # ──────────────────────────────────────────────
 def merge_and_convert_data(df_basic, df_sales, df_media, image_host, shop_code):
-    """3개 데이터프레임 병합 (Parent SKU/Child SKU 완전 해결)"""
+    """
+    통합 엑셀 생성 (매핑 오류 수정 및 이미지 컬럼 검색 강화)
+    - 위치 기반(인덱스) 매핑 제거 -> 이름 기반 매핑으로 변경
+    - Item Image 1~8 검색 패턴 추가
+    """
 
     # ========================================
-    # 1. 정확한 컬럼 매핑
+    # 1. BASIC 파일 컬럼 매핑 (Category, Product Name)
     # ========================================
+    # Parent SKU
+    psku_basic = find_parent_sku_column(df_basic.columns)
 
-    # BASIC 파일
-    parent_sku_basic = find_parent_sku_column(df_basic.columns)
-    category_basic = find_column_flexible('Category', df_basic.columns,
-                                          ['Product Category', 'Category Name'])
-    product_name_basic = find_column_flexible('Product Name', df_basic.columns,
-                                              ['Item Name', 'Title'])
+    # Category: 다양한 별칭 추가
+    category_basic = find_column_flexible('Category', df_basic.columns, [
+        'et_title_category', 'Product Category', 'Category Name', 'Cat ID', 'Category ID'
+    ])
 
-    # SALES 파일
-    parent_sku_sales = find_parent_sku_column(df_sales.columns)
-    child_sku_sales = find_child_sku_column(df_sales.columns, parent_sku_sales or "")
+    # Product Name
+    product_name_basic = find_column_flexible('Product Name', df_basic.columns, [
+        'et_title_product_name', 'Item Name', 'Title', 'Product Name'
+    ])
 
-    # MEDIA 파일
-    parent_sku_media = find_parent_sku_column(df_media.columns)
+    # ========================================
+    # 2. SALES 파일 컬럼 매핑 (PSKU, SKU)
+    # ========================================
+    psku_sales = find_parent_sku_column(df_sales.columns)
+    sku_sales = find_child_sku_column(df_sales.columns, psku_sales or "")
 
-    # Media Variation 관련 (위치 기반)
-    media_columns = list(df_media.columns)
-    var_name_media = None
-    var_option_media = None
-    var_image_media = None
+    # ========================================
+    # 3. MEDIA 파일 컬럼 매핑 (핵심 수정)
+    # ========================================
+    psku_media = find_parent_sku_column(df_media.columns)
 
-    if parent_sku_media:
-        try:
-            psku_index = media_columns.index(parent_sku_media)
-            if len(media_columns) > psku_index + 1:
-                var_name_media = media_columns[psku_index + 1]
-            if len(media_columns) > psku_index + 2:
-                var_option_media = media_columns[psku_index + 2]
-            if len(media_columns) > psku_index + 3:
-                var_image_media = media_columns[psku_index + 3]
-        except ValueError:
-            pass
+    # [수정] 위치 기반(인덱스) 추측 로직 제거 -> 명시적 컬럼명 검색으로 변경
 
-    # Item Image 1-8 찾기
-    item_images = {}
+    # 3-1. Variation Name1 (옵션명 라벨, 예: Size, Color)
+    # 잘못된 매핑(Product Name) 방지를 위해 정확한 후보군 지정
+    var_name_media = find_column_flexible('Variation Name1', df_media.columns, [
+        'Variation Name', 'Variation Name1', 'et_title_variation_name',
+        'Option Name', 'Option 1 Name', 'Variation 1 Name'
+    ])
+
+    # 3-2. Option for Variation 1 (실제 옵션값, 예: Red, XL)
+    # 잘못된 매핑(Category) 방지
+    var_option_media = find_column_flexible('Option for Variation 1', df_media.columns, [
+        'Variation Option', 'Option for Variation 1', 'et_title_variation_option',
+        'Option 1', 'Variation 1 Option', 'Option'
+    ])
+
+    # 3-3. Image per Variation (옵션별 이미지)
+    # 잘못된 매핑(Cover Image) 방지
+    var_image_media = find_column_flexible('Image per Variation', df_media.columns, [
+        'Image per Variation', 'Variation Image', 'Option Image',
+        'et_title_variation_image', 'Option 1 Image'
+    ])
+
+    # 3-4. Item Image 1~8 (상품 상세 이미지)
+    # 빈값 문제 해결: Shopee 포맷(ps_item_image_url_1) 등 다양한 패턴 지원
+    item_images_map = {}
     for i in range(1, 9):
-        for col in media_columns:
-            col_lower = str(col).lower()
-            if f'item image {i}' in col_lower or f'item image{i}' in col_lower:
-                item_images[f'Item Image {i}'] = col
-                break
+        # 검색 우선순위: Item Image 1 -> Image 1 -> ps_item_image_url_1 -> et_title...
+        candidates = [
+            f'Item Image {i}', f'Item Image{i}',
+            f'Image {i}', f'Image{i}',
+            f'ps_item_image_url_{i}',
+            f'et_title_item_image_{i}'
+        ]
+        found = find_column_flexible(f'Item Image {i}', df_media.columns, candidates)
+        if found:
+            item_images_map[f'Item Image {i}'] = found
 
     # ========================================
-    # 2. 상세 디버깅 정보
+    # 4. 상세 디버깅 정보 (매핑 결과 확인)
     # ========================================
-    with st.expander("🔍 컬럼 매핑 결과", expanded=True):
+    with st.expander("🔍 컬럼 매핑 결과 (수정됨)", expanded=True):
         st.write("### BASIC 파일")
-        st.write(f"- Parent SKU → PSKU: `{parent_sku_basic}` {'✅' if parent_sku_basic else '❌'}")
-        st.write(f"- Category: `{category_basic}` {'✅' if category_basic else '❌'}")
-        st.write(f"- Product Name: `{product_name_basic}` {'✅' if product_name_basic else '❌'}")
+        st.write(f"- Category: `{category_basic}` (예상: 카테고리 ID/경로)")
+        st.write(f"- Product Name: `{product_name_basic}`")
 
-        st.write("### SALES 파일")
-        st.write(f"- Parent SKU → PSKU: `{parent_sku_sales}` {'✅' if parent_sku_sales else '❌'}")
-        st.write(f"- Child SKU → SKU: `{child_sku_sales}` {'✅' if child_sku_sales else '❌'}")
+        st.write("### MEDIA 파일 (이미지/옵션)")
+        st.write(f"- Variation Name1: `{var_name_media}` (예상: Variation Name)")
+        st.write(f"- Option for Var 1: `{var_option_media}` (예상: Option Name)")
+        st.write(f"- Image per Var: `{var_image_media}` (예상: URL)")
 
-        st.write("### MEDIA 파일")
-        st.write(f"- Parent SKU → PSKU: `{parent_sku_media}` {'✅' if parent_sku_media else '❌'}")
-        st.write(f"- Variation Name1: `{var_name_media}` {'✅' if var_name_media else '❌'}")
-        st.write(f"- Option for Variation 1: `{var_option_media}` {'✅' if var_option_media else '❌'}")
-        st.write(f"- Image per Variation: `{var_image_media}` {'✅' if var_image_media else '❌'}")
-        st.write(f"- Item Images 매핑: {len(item_images)}개 발견")
-
-        if len(item_images) > 0:
-            st.write("  - " + ", ".join(item_images.keys()))
+        st.write("### Item Images 매핑")
+        if item_images_map:
+            for k, v in item_images_map.items():
+                st.write(f"- {k}: `{v}`")
+        else:
+            st.warning("⚠️ Item Image 컬럼을 하나도 찾지 못했습니다. MEDIA 파일의 헤더를 확인해주세요.")
+            st.write("MEDIA 파일 컬럼 목록:", list(df_media.columns))
 
     # ========================================
-    # 3. 필수 컬럼 검증
+    # 5. 필수 컬럼 검증
     # ========================================
     missing = []
-    if not parent_sku_basic: missing.append("BASIC: Parent SKU")
-    if not parent_sku_sales: missing.append("SALES: Parent SKU")
-    if not child_sku_sales: missing.append("SALES: Child SKU (SKU)")
-    if not parent_sku_media: missing.append("MEDIA: Parent SKU")
+    if not psku_basic: missing.append("BASIC: Parent SKU")
+    if not psku_sales: missing.append("SALES: Parent SKU")
+    if not sku_sales: missing.append("SALES: Child SKU")
+    if not psku_media: missing.append("MEDIA: Parent SKU")
 
     if missing:
-        st.error("❌ **필수 컬럼을 찾을 수 없습니다:**")
-        for m in missing:
-            st.write(f"  • {m}")
+        st.error("❌ 필수 컬럼 누락")
         raise ValueError("필수 컬럼 누락: " + ", ".join(missing))
 
     # ========================================
-    # 4. 컬럼명 표준화 (Parent SKU → PSKU, Child SKU → SKU)
+    # 6. 컬럼명 표준화 (Rename)
     # ========================================
     df_basic = df_basic.copy()
     df_sales = df_sales.copy()
     df_media = df_media.copy()
 
-    # BASIC
-    rename_basic = {parent_sku_basic: 'PSKU'}
+    # BASIC Rename
+    rename_basic = {psku_basic: 'PSKU'}
     if category_basic: rename_basic[category_basic] = 'Category'
     if product_name_basic: rename_basic[product_name_basic] = 'Product Name'
     df_basic.rename(columns=rename_basic, inplace=True)
 
-    # SALES
-    rename_sales = {parent_sku_sales: 'PSKU', child_sku_sales: 'SKU'}
+    # SALES Rename
+    rename_sales = {psku_sales: 'PSKU', sku_sales: 'SKU'}
     df_sales.rename(columns=rename_sales, inplace=True)
 
-    # MEDIA
-    rename_media = {parent_sku_media: 'PSKU'}
+    # MEDIA Rename (여기가 핵심)
+    rename_media = {psku_media: 'PSKU'}
     if var_name_media: rename_media[var_name_media] = 'Variation Name1'
     if var_option_media: rename_media[var_option_media] = 'Option for Variation 1'
     if var_image_media: rename_media[var_image_media] = 'Image per Variation'
 
-    for target, source in item_images.items():
-        rename_media[source] = target
+    # Item Image Rename
+    for target_name, source_col in item_images_map.items():
+        rename_media[source_col] = target_name
 
     df_media.rename(columns=rename_media, inplace=True)
 
     # ========================================
-    # 5. PSKU 반복 입력 처리 (Forward Fill)
+    # 7. 데이터 전처리
     # ========================================
+    # PSKU 채우기
     for df in [df_basic, df_sales, df_media]:
         if 'PSKU' in df.columns:
             df['PSKU'] = df['PSKU'].replace(r'^\s*$', pd.NA, regex=True)
             df['PSKU'] = df['PSKU'].ffill()
             df['PSKU'] = df['PSKU'].astype(str).str.strip()
 
-    # ========================================
-    # 6. Variation Name1 처리 (Option/Options → 빈값)
-    # ========================================
+    # Variation Name의 "Option", "Options" 텍스트 제거
     if 'Variation Name1' in df_media.columns:
         df_media['Variation Name1'] = df_media['Variation Name1'].astype(str)
         df_media.loc[
-            df_media['Variation Name1'].str.lower().isin(['option', 'options']),
+            df_media['Variation Name1'].str.lower().isin(['option', 'options', 'variation']),
             'Variation Name1'
         ] = ''
 
     # ========================================
-    # 7. 데이터 병합
+    # 8. 데이터 병합 (Merge)
     # ========================================
     try:
+        # SALES(기준) + BASIC
         merged_df = pd.merge(df_sales, df_basic, on='PSKU', how='left', suffixes=('', '_basic'))
+
+        # + MEDIA
+        # MEDIA 데이터가 덮어써지지 않도록 suffix 주의
         merged_df = pd.merge(merged_df, df_media, on='PSKU', how='left', suffixes=('', '_media'))
-        st.success("✅ 데이터 병합 성공!")
+
     except Exception as e:
         raise ValueError(f"데이터 병합 실패: {str(e)}")
 
     # ========================================
-    # 8. 트래시 데이터 제거
+    # 9. 트래시 데이터 제거
     # ========================================
     merged_df = merged_df[
         (merged_df['PSKU'].notna()) &
@@ -470,7 +494,7 @@ def merge_and_convert_data(df_basic, df_sales, df_media, image_host, shop_code):
         ].copy().reset_index(drop=True)
 
     # ========================================
-    # 9. 최종 컬럼 구성
+    # 10. 최종 컬럼 데이터 추출
     # ========================================
     target_columns = [
         "Category", "PSKU", "Product Name", "Variation Name1",
@@ -481,34 +505,35 @@ def merge_and_convert_data(df_basic, df_sales, df_media, image_host, shop_code):
 
     final_df = pd.DataFrame()
 
-    for target_col in target_columns:
-        if target_col == "Cover image":
-            final_df[target_col] = ""
-        elif target_col in merged_df.columns:
-            final_df[target_col] = merged_df[target_col]
+    for col in target_columns:
+        if col == "Cover image":
+            final_df[col] = ""  # 나중에 생성
+            continue
+
+        # 1. 직접 매칭된 컬럼 확인 (Rename된 것들)
+        if col in merged_df.columns:
+            final_df[col] = merged_df[col]
+
+        # 2. Suffix 붙은 컬럼 확인 (병합 과정에서 이름 변경된 경우)
+        elif f"{col}_media" in merged_df.columns:
+            final_df[col] = merged_df[f"{col}_media"]
+        elif f"{col}_basic" in merged_df.columns:
+            final_df[col] = merged_df[f"{col}_basic"]
+
+        # 3. 매칭 실패 시 빈값
         else:
-            # _media, _basic 접미사 확인
-            found = False
-            for suffix in ['_media', '_basic']:
-                col_name = f"{target_col}{suffix}"
-                if col_name in merged_df.columns:
-                    final_df[target_col] = merged_df[col_name]
-                    found = True
-                    break
-            if not found:
-                final_df[target_col] = ""
+            final_df[col] = ""
 
     # ========================================
-    # 10. Cover Image URL 생성
+    # 11. 후처리 (Cover Image, Category)
     # ========================================
+    # Cover Image 생성
     final_df['Cover image'] = final_df.apply(
         lambda row: generate_cover_image_url(row, image_host, shop_code),
         axis=1
     )
 
-    # ========================================
-    # 11. 카테고리 정리
-    # ========================================
+    # Category 숫자 제거
     if 'Category' in final_df.columns:
         final_df['Category'] = final_df['Category'].astype(str).str.replace(
             r'^\s*\d+\s*-\s*', '', regex=True
