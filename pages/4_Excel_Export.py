@@ -1,14 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-Page 4: 통합 엑셀 생성기 (Cover Image 규칙 적용 + 단일 탭)
-BASIC/MEDIA/SALES 데이터를 병합하여 Shopee 업로드용 엑셀을 생성합니다.
+Page 4: 통합 엑셀 생성기 (최적화 버전)
+BASIC/MEDIA/SALES 파일을 한 번에 업로드하여 Shopee 업로드용 엑셀 생성
+- 일괄 파일 업로드 및 자동 분류
+- 사이드바 이미지 호스팅 URL 자동 적용
+- Cover Image 규칙: 기존 Step 6과 동일 (PSKU 우선 → SKU)
+- 단일 탭 출력
 """
 
 from pathlib import Path
 import sys
 import io
 from datetime import datetime
-from typing import List, Dict, Optional
+from typing import List, Optional, Tuple
 
 import streamlit as st
 import pandas as pd
@@ -22,18 +26,13 @@ if str(ROOT) not in sys.path:
 
 from auth_guard import bootstrap_auth
 from user_manager import get_user_pref
-from profile_sidebar import render_profile_sidebar, extract_sheet_id
-
-# item_uploader 모듈에서 공통 유틸 import
-from item_uploader.utils_common import (
-    load_env, open_sheet_by_env, safe_worksheet,
-    with_retry, get_env, header_key
-)
+from profile_sidebar import render_profile_sidebar
+from item_uploader.utils_common import get_env, header_key
 
 bootstrap_auth(go_home=False)
 
 st.title("📊 통합 엑셀 생성기")
-st.caption("BASIC/MEDIA/SALES 데이터를 병합하여 Shopee 업로드용 엑셀을 생성합니다")
+st.caption("BASIC/MEDIA/SALES 파일을 한 번에 업로드하여 Shopee 업로드용 엑셀을 생성합니다")
 st.markdown("---")
 
 # ──────────────────────────────────────────────
@@ -42,32 +41,9 @@ st.markdown("---")
 render_profile_sidebar(
     sheet_key="export_sheet_id",
     host_key="export_image_host",
-    sheet_label="데이터 시트 URL",
-    host_label="Image Hosting URL",
+    sheet_label="데이터 시트 URL (미사용)",
+    host_label="Image Hosting URL (필수)",
 )
-
-
-def resolve_export_sid() -> str:
-    """프로필 → 세션 → 환경 순서로 Sheet ID 탐색"""
-    raw = (
-            get_user_pref("export_sheet_id")
-            or get_user_pref("copy_sheet_id")
-            or get_user_pref("sheet_id")
-    )
-    if raw:
-        sid = extract_sheet_id(str(raw))
-        if sid:
-            return sid
-
-    sid = (st.session_state.get("GOOGLE_SHEETS_SPREADSHEET_ID") or "").strip()
-    if sid:
-        return sid
-
-    raw = (
-            get_env("GOOGLE_SHEETS_SPREADSHEET_ID")
-            or get_env("GOOGLE_SHEET_KEY")
-    )
-    return extract_sheet_id(str(raw)) if raw else ""
 
 
 def resolve_export_host() -> str:
@@ -78,44 +54,53 @@ def resolve_export_host() -> str:
             or get_user_pref("image_host")
     )
     if host:
-        return host
+        return host.strip()
 
     host = st.session_state.get("IMAGE_HOSTING_URL")
     if host:
-        return host
+        return host.strip()
 
     return get_env("IMAGE_HOSTING_URL") or ""
 
 
 # ──────────────────────────────────────────────
-# 데이터 로딩 함수
+# 파일 분류 및 처리 함수
 # ──────────────────────────────────────────────
-@st.cache_data(show_spinner=False, ttl=300)
-def load_sheet_data(spreadsheet_id: str, sheet_name: str) -> pd.DataFrame:
-    """Google Sheets에서 데이터를 로드합니다."""
-    try:
-        load_env()
-        import os
-        os.environ["GOOGLE_SHEETS_SPREADSHEET_ID"] = spreadsheet_id
+def _target_tab(filename: str) -> Optional[str]:
+    """
+    기존 item_uploader.upload_apply와 동일한 규칙으로 파일 분류
+    파일명에 basic/media/sales 키워드 포함 여부로 판단
+    """
+    low = filename.lower()
+    if "basic" in low:
+        return "BASIC"
+    if "media" in low:
+        return "MEDIA"
+    if "sales" in low:
+        return "SALES"
+    return None
 
-        sh = open_sheet_by_env()
-        ws = safe_worksheet(sh, sheet_name)
-        data = with_retry(lambda: ws.get_all_values())
 
-        if not data:
-            return pd.DataFrame()
+def classify_files(uploaded_files) -> Tuple[Optional[any], Optional[any], Optional[any]]:
+    """업로드된 파일들을 자동 분류하여 반환"""
+    basic_file = None
+    media_file = None
+    sales_file = None
 
-        # 첫 행을 헤더로 사용
-        df = pd.DataFrame(data[1:], columns=data[0])
-        return df
+    for file in uploaded_files:
+        file_type = _target_tab(file.name)
+        if file_type == "BASIC":
+            basic_file = file
+        elif file_type == "MEDIA":
+            media_file = file
+        elif file_type == "SALES":
+            sales_file = file
 
-    except Exception as e:
-        st.error(f"시트 로드 실패 ({sheet_name}): {str(e)}")
-        return pd.DataFrame()
+    return basic_file, media_file, sales_file
 
 
 def load_local_file(file) -> pd.DataFrame:
-    """업로드된 파일을 DataFrame으로 변환합니다."""
+    """업로드된 파일을 DataFrame으로 변환"""
     if file is None:
         return pd.DataFrame()
 
@@ -130,7 +115,7 @@ def load_local_file(file) -> pd.DataFrame:
 
 
 # ──────────────────────────────────────────────
-# 컬럼 매핑 및 병합 로직
+# 데이터 병합 및 변환 로직
 # ──────────────────────────────────────────────
 def find_column(target: str, df_columns: List[str]) -> Optional[str]:
     """header_key 함수를 사용한 지능형 컬럼 매칭"""
@@ -143,11 +128,11 @@ def find_column(target: str, df_columns: List[str]) -> Optional[str]:
 
 def generate_cover_image_url(row: pd.Series, image_host: str, shop_code: str) -> str:
     """
-    기존 automation_steps.py의 Step 6 로직과 동일하게 Cover Image URL 생성
+    기존 automation_steps.py Step 6과 동일한 Cover Image URL 생성 규칙
 
-    규칙:
-    1. Parent SKU가 있으면 우선 사용
-    2. 없으면 SKU 사용
+    우선순위:
+    1. PSKU(Parent SKU) 우선 사용
+    2. PSKU가 없으면 SKU 사용
     3. 형식: {host}{sku}_C_{shop_code}.jpg
     """
     if not image_host or not shop_code:
@@ -156,7 +141,7 @@ def generate_cover_image_url(row: pd.Series, image_host: str, shop_code: str) ->
     if not image_host.endswith('/'):
         image_host += '/'
 
-    # Parent SKU 우선, 없으면 SKU 사용 (Step 6 로직과 동일)
+    # Parent SKU 우선 규칙 (Step 6과 동일)
     psku = str(row.get('PSKU', '') or '').strip()
     sku = str(row.get('SKU', '') or '').strip()
 
@@ -172,20 +157,20 @@ def merge_and_convert_data(
         df_basic: pd.DataFrame,
         df_sales: pd.DataFrame,
         df_media: pd.DataFrame,
-        image_host: str = "",
-        shop_code: str = ""
+        image_host: str,
+        shop_code: str
 ) -> pd.DataFrame:
     """
-    3개 데이터프레임을 병합하고 Shopee 형식으로 변환합니다.
+    3개 데이터프레임을 병합하고 Shopee 형식으로 변환
 
-    병합 로직:
+    병합 순서:
     1. SALES를 기준으로 BASIC과 MEDIA를 PSKU로 연결
-    2. Cover Image URL은 Step 6 로직과 동일하게 생성
-    3. 기타 이미지 URL 자동 생성
-    4. Shopee 업로드 형식에 맞게 컬럼 순서 정렬
+    2. Cover Image는 Step 6 규칙으로 생성
+    3. 기타 이미지는 호스팅 URL + 파일명으로 처리
+    4. 최종 컬럼 순서 정렬
     """
 
-    # 1. 필수 컬럼 검증 및 정규화
+    # 1. 필수 컬럼 검증 및 매핑
     psku_basic = find_column('PSKU', df_basic.columns) or find_column('Product ID', df_basic.columns)
     psku_sales = find_column('PSKU', df_sales.columns) or find_column('Parent SKU', df_sales.columns)
     psku_media = find_column('PSKU', df_media.columns) or find_column('Product ID', df_media.columns)
@@ -193,18 +178,18 @@ def merge_and_convert_data(
 
     if not all([psku_basic, psku_sales, psku_media, sku_sales]):
         missing = []
-        if not psku_basic: missing.append("BASIC에서 PSKU/Product ID")
-        if not psku_sales: missing.append("SALES에서 PSKU/Parent SKU")
-        if not psku_media: missing.append("MEDIA에서 PSKU/Product ID")
-        if not sku_sales: missing.append("SALES에서 SKU/Seller SKU")
-        raise ValueError(f"필수 컬럼 누락: {', '.join(missing)}")
+        if not psku_basic: missing.append("BASIC: PSKU/Product ID")
+        if not psku_sales: missing.append("SALES: PSKU/Parent SKU")
+        if not psku_media: missing.append("MEDIA: PSKU/Product ID")
+        if not sku_sales: missing.append("SALES: SKU/Seller SKU")
+        raise ValueError(f"필수 컬럼 누락:\n• " + "\n• ".join(missing))
 
     # 2. 컬럼명 통일 (병합 키)
     df_basic = df_basic.rename(columns={psku_basic: 'PSKU'})
     df_sales = df_sales.rename(columns={psku_sales: 'PSKU', sku_sales: 'SKU'})
     df_media = df_media.rename(columns={psku_media: 'PSKU'})
 
-    # 3. Sales 기준 병합 (Left Join)
+    # 3. 병합 실행 (Left Join)
     try:
         # Sales + Basic
         merged_df = pd.merge(
@@ -232,17 +217,19 @@ def merge_and_convert_data(
         if not image_host.endswith('/'):
             image_host += '/'
 
-        # Cover Image를 제외한 나머지 이미지 컬럼만 처리
+        # Cover Image를 제외한 나머지 이미지 컬럼 처리
         image_cols = [col for col in merged_df.columns
                       if any(keyword in col.lower() for keyword in ['image', 'img'])
                       and 'cover' not in col.lower()]
 
         for col in image_cols:
             merged_df[col] = merged_df[col].apply(
-                lambda x: f"{image_host}{x}" if pd.notna(x) and str(x).strip() and not str(x).startswith("http") else x
+                lambda x: f"{image_host}{x}"
+                if pd.notna(x) and str(x).strip() and not str(x).startswith(("http://", "https://"))
+                else x
             )
 
-    # 5. 최종 컬럼 순서 정리
+    # 5. 최종 컬럼 구성
     target_columns = [
         "Category", "PSKU", "Product Name", "Variation Name1",
         "Option for Variation 1", "Image per Variation", "SKU",
@@ -258,7 +245,7 @@ def merge_and_convert_data(
         else:
             final_df[target_col] = ""
 
-    # 6. Cover Image URL 생성 (Step 6 로직 적용)
+    # 6. Cover Image URL 생성 (Step 6 규칙 적용)
     final_df['Cover image'] = final_df.apply(
         lambda row: generate_cover_image_url(row, image_host, shop_code),
         axis=1
@@ -319,153 +306,129 @@ def create_excel_file(final_df: pd.DataFrame) -> io.BytesIO:
 # ──────────────────────────────────────────────
 # 메인 UI
 # ──────────────────────────────────────────────
-tab1, tab2 = st.tabs(["📂 로컬 파일 업로드", "☁️ Google Sheets"])
 
-# Tab 1: 로컬 파일 업로드
-with tab1:
-    st.subheader("📁 파일 업로드")
+# 현재 설정된 Image Host 표시
+current_host = resolve_export_host()
+if current_host:
+    st.success(f"✅ **사용 중인 이미지 호스팅 URL:** `{current_host}`")
+    st.caption("💡 설정 변경은 좌측 사이드바에서 가능합니다.")
+else:
+    st.error("❌ **이미지 호스팅 URL이 설정되지 않았습니다.**")
+    st.warning("⚠️ 좌측 사이드바에서 'Image Hosting URL'을 설정한 후 '💾 설정 저장'을 클릭해주세요.")
+
+st.subheader("📁 파일 및 설정")
+
+col_upload, col_shop = st.columns([3, 1])
+
+with col_upload:
+    # 일괄 파일 업로드
+    uploaded_files = st.file_uploader(
+        "BASIC, MEDIA, SALES 파일을 모두 선택하세요",
+        type=['xlsx', 'xls', 'csv'],
+        accept_multiple_files=True,
+        help="파일명에 basic/media/sales 키워드가 포함되어야 합니다.\n예: product_basic.xlsx, item_media.xlsx, sales_data.xlsx"
+    )
+
+with col_shop:
+    # 샵 코드 입력
+    shop_code = st.text_input(
+        "샵 코드 (필수)",
+        placeholder="예: RO, 01",
+        help="Cover Image URL 생성에 사용됩니다\n형식: {SKU}_C_{샵코드}.jpg"
+    )
+
+# 파일 분류 및 상태 표시
+if uploaded_files:
+    basic_file, media_file, sales_file = classify_files(uploaded_files)
+
+    st.subheader("📋 파일 분류 결과")
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        basic_file = st.file_uploader("BASIC 파일", type=['xlsx', 'xls', 'csv'], key="basic")
+        if basic_file:
+            st.success(f"✅ **BASIC**\n`{basic_file.name}`")
+        else:
+            st.error("❌ **BASIC** 파일 없음")
+
     with col2:
-        sales_file = st.file_uploader("SALES 파일", type=['xlsx', 'xls', 'csv'], key="sales")
+        if media_file:
+            st.success(f"✅ **MEDIA**\n`{media_file.name}`")
+        else:
+            st.error("❌ **MEDIA** 파일 없음")
+
     with col3:
-        media_file = st.file_uploader("MEDIA 파일", type=['xlsx', 'xls', 'csv'], key="media")
+        if sales_file:
+            st.success(f"✅ **SALES**\n`{sales_file.name}`")
+        else:
+            st.error("❌ **SALES** 파일 없음")
 
-    col_a, col_b = st.columns(2)
-    with col_a:
-        host = st.text_input("이미지 호스팅 URL", value=resolve_export_host(), key="host_local")
-    with col_b:
-        shop_code = st.text_input(
-            "샵 코드 (Cover Image용)",
-            placeholder="예: RO, 01 등",
-            help="Cover Image URL 생성에 사용됩니다 (필수)",
-            key="shop_local"
-        )
+    # 실행 조건 확인
+    all_ready = all([basic_file, media_file, sales_file, shop_code, current_host])
 
-    if basic_file and sales_file and media_file and shop_code:
-        if st.button("🚀 파일 병합 및 엑셀 생성", type="primary", key="btn_local"):
-            try:
-                with st.spinner("파일을 처리하는 중..."):
-                    df_basic = load_local_file(basic_file)
-                    df_sales = load_local_file(sales_file)
-                    df_media = load_local_file(media_file)
+    if not all_ready:
+        missing = []
+        if not basic_file: missing.append("BASIC 파일")
+        if not media_file: missing.append("MEDIA 파일")
+        if not sales_file: missing.append("SALES 파일")
+        if not shop_code: missing.append("샵 코드")
+        if not current_host: missing.append("이미지 호스팅 URL")
 
-                    final_df = merge_and_convert_data(
-                        df_basic, df_sales, df_media,
-                        host, shop_code
-                    )
+        st.warning(f"⚠️ **실행하려면 다음이 필요합니다:** {', '.join(missing)}")
 
-                    st.success(f"✅ 병합 완료! 총 {len(final_df)}개 행 생성")
+    # 실행 버튼
+    if st.button("🚀 통합 엑셀 생성", type="primary", disabled=not all_ready, use_container_width=True):
+        try:
+            with st.spinner("데이터를 병합하고 엑셀을 생성하는 중..."):
+                # 데이터 로드
+                df_basic = load_local_file(basic_file)
+                df_sales = load_local_file(sales_file)
+                df_media = load_local_file(media_file)
 
-                    # 결과 미리보기
-                    st.subheader("📊 결과 미리보기 (상위 10개)")
-                    st.dataframe(final_df.head(10), use_container_width=True)
+                # 병합 및 변환
+                final_df = merge_and_convert_data(
+                    df_basic, df_sales, df_media,
+                    current_host, shop_code
+                )
 
-                    # 통계 정보
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("총 행 수", f"{len(final_df):,}")
-                    with col2:
-                        unique_psku = final_df['PSKU'].nunique()
-                        st.metric("고유 상품 수", f"{unique_psku:,}")
-                    with col3:
-                        unique_sku = final_df['SKU'].nunique()
-                        st.metric("고유 SKU 수", f"{unique_sku:,}")
-                    with col4:
-                        has_cover = (final_df['Cover image'] != '').sum()
-                        st.metric("Cover Image", f"{has_cover:,}")
+                st.success(f"✅ **병합 완료!** 총 {len(final_df):,}개 행이 생성되었습니다.")
 
-                    # 엑셀 다운로드 (단일 탭)
-                    buffer = create_excel_file(final_df)
+                # 결과 미리보기
+                st.subheader("📊 결과 미리보기")
+                st.dataframe(final_df.head(10), use_container_width=True)
 
-                    date_str = datetime.now().strftime("%Y%m%d_%H%M")
-                    filename = f"Shopee_Upload_{shop_code}_{date_str}.xlsx"
+                # 통계 정보
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("총 행 수", f"{len(final_df):,}")
+                with col2:
+                    unique_psku = final_df['PSKU'].nunique()
+                    st.metric("고유 상품 수", f"{unique_psku:,}")
+                with col3:
+                    unique_sku = final_df['SKU'].nunique()
+                    st.metric("고유 SKU 수", f"{unique_sku:,}")
+                with col4:
+                    has_cover = (final_df['Cover image'] != '').sum()
+                    st.metric("Cover Image 생성", f"{has_cover:,}")
 
-                    st.download_button(
-                        label=f"📥 {filename} 다운로드",
-                        data=buffer,
-                        file_name=filename,
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        type="primary",
-                        use_container_width=True
-                    )
+                # 엑셀 다운로드
+                buffer = create_excel_file(final_df)
 
-            except Exception as e:
-                st.error(f"❌ 처리 중 오류 발생: {str(e)}")
-    elif basic_file and sales_file and media_file:
-        st.warning("⚠️ 샵 코드를 입력해주세요. Cover Image 생성에 필요합니다.")
+                date_str = datetime.now().strftime("%Y%m%d_%H%M")
+                filename = f"Shopee_Upload_{shop_code}_{date_str}.xlsx"
 
-# Tab 2: Google Sheets
-with tab2:
-    sid = resolve_export_sid()
+                st.download_button(
+                    label=f"📥 {filename} 다운로드",
+                    data=buffer,
+                    file_name=filename,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary",
+                    use_container_width=True
+                )
 
-    if not sid:
-        st.warning("⚠️ Google Sheets ID가 설정되지 않았습니다. 사이드바에서 설정해주세요.")
-    else:
-        with st.sidebar:
-            st.caption(f"사용 중인 Sheet ID: `{sid}`")
+        except Exception as e:
+            st.error(f"❌ **처리 중 오류 발생:** {str(e)}")
+            with st.expander("🔍 상세 오류 정보"):
+                import traceback
 
-        st.subheader("📋 시트 이름 설정")
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-            basic_sheet = st.text_input("BASIC 시트명", value="BASIC")
-        with col2:
-            sales_sheet = st.text_input("SALES 시트명", value="SALES")
-        with col3:
-            media_sheet = st.text_input("MEDIA 시트명", value="MEDIA")
-
-        col_a, col_b = st.columns(2)
-        with col_a:
-            host_gs = st.text_input("이미지 호스팅 URL", value=resolve_export_host(), key="host_gs")
-        with col_b:
-            shop_code_gs = st.text_input(
-                "샵 코드 (Cover Image용)",
-                placeholder="예: RO, 01 등",
-                help="Cover Image URL 생성에 사용됩니다 (필수)",
-                key="shop_gs"
-            )
-
-        if shop_code_gs and st.button("📥 시트 데이터 로드 및 병합", type="primary", key="btn_gs"):
-            try:
-                with st.spinner("Google Sheets에서 데이터를 불러오는 중..."):
-                    df_basic = load_sheet_data(sid, basic_sheet)
-                    df_sales = load_sheet_data(sid, sales_sheet)
-                    df_media = load_sheet_data(sid, media_sheet)
-
-                    if df_basic.empty or df_sales.empty or df_media.empty:
-                        st.error("❌ 일부 시트를 불러올 수 없습니다.")
-                    else:
-                        final_df = merge_and_convert_data(
-                            df_basic, df_sales, df_media,
-                            host_gs, shop_code_gs
-                        )
-
-                        st.success(f"✅ 병합 완료! 총 {len(final_df)}개 행 생성")
-
-                        # 결과 미리보기 및 다운로드 (로컬과 동일한 로직)
-                        st.subheader("📊 결과 미리보기 (상위 10개)")
-                        st.dataframe(final_df.head(10), use_container_width=True)
-
-                        # 엑셀 다운로드
-                        buffer = create_excel_file(final_df)
-
-                        date_str = datetime.now().strftime("%Y%m%d_%H%M")
-                        filename = f"Shopee_Upload_GS_{shop_code_gs}_{date_str}.xlsx"
-
-                        st.download_button(
-                            label=f"📥 {filename} 다운로드",
-                            data=buffer,
-                            file_name=filename,
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            type="primary",
-                            use_container_width=True
-                        )
-
-            except Exception as e:
-                st.error(f"❌ Google Sheets 처리 중 오류 발생: {str(e)}")
-        elif not shop_code_gs:
-            st.warning("⚠️ 샵 코드를 입력해주세요. Cover Image 생성에 필요합니다.")
+                st.code(traceback.format_exc())
 
