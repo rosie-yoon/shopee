@@ -356,11 +356,13 @@ def merge_and_convert_data(df_basic, df_sales, df_media, image_host, shop_code):
     option_img_cols = {}
 
     for col, k in keys.items():
-        m = re.search(r"option\s*_?(\d+)\s*_?name", k)
+        # ettitleoption1forvariation1
+        m = re.search(r"option(\d+)forvariation1", k)
         if m:
             option_name_cols[int(m.group(1))] = col
 
-        m2 = re.search(r"option\s*_?(\d+)\s*_?image", k)
+        # ettitleoptionimage1forvariation1
+        m2 = re.search(r"optionimage(\d+)forvariation1", k)
         if m2:
             option_img_cols[int(m2.group(1))] = col
 
